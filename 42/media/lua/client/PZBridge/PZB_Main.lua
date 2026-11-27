@@ -8,6 +8,7 @@ local S = PZBridge.S
 local P = PZBridge.P
 local L = PZBridge.L
 local F = PZBridge.FILES
+local T = PZBridge.T
 
 ---------------------------------------------------------------------------
 -- Разбор строки команды: "<id> <tool> {json}" или "<id> <tool> a b key=value"
@@ -36,12 +37,13 @@ function PZBridge.parseLine(line)
         if type(obj) ~= "table" then return id, tool, nil, "bad json: " .. tostring(err) end
         args = obj
     elseif TEXT_TOOLS[tool] then
-        args.text = rest
+        -- не-ASCII текст pzb.py присылает как \uXXXX (и в JSON, и в позиционной форме)
+        args.text = U.unescapeU(rest)
     elseif rest ~= "" then
         local def = PZBridge.tools[tool]
         local names = def and def.params or {}
         local i = 0
-        for tok in string.gmatch(rest, "%S+") do
+        for tok in string.gmatch(U.unescapeU(rest), "%S+") do
             local k, v = string.match(tok, "^([%w_]+)=(.*)$")
             if k then
                 args[k] = convert(v)
@@ -66,12 +68,12 @@ function PZBridge.execute(id, toolName, args)
         return
     end
     if not S.access and not def.always then
-        PZBridge.setResult(id, toolName, "denied", "access=false: игрок не разрешил управление (окно F9)")
+        PZBridge.setResult(id, toolName, "denied", "access=false: the player has not allowed control (F9 window)")
         return
     end
     local p = PZBridge.player()
     if not p then
-        PZBridge.setResult(id, toolName, "error", "нет живого игрока")
+        PZBridge.setResult(id, toolName, "error", "no living player")
         return
     end
     if def.kind == "action" then
@@ -261,13 +263,13 @@ function PZBridge.guardTick(p, now)
     S.alert = { type = "zombie_close", dist = d, count = t.count, seeing = t.seeing,
                 zombie = P.strip({ t.nearest })[1], gt = PZBridge.gameTimeStr() }
     if g.autoflee then
-        PZBridge.event("alert", S.alert, "зомби в " .. d .. " клетках, отступаю")
+        PZBridge.event("alert", S.alert, "zombie at " .. d .. " tiles, fleeing")
         L.startFlee({ id = nil, tool = "flee" }, p, { distance = g.flee_distance, mode = "run" })
     else
         PZBridge.stopJob("autopause", "interrupted")
         PZBridge.setPause(true)
-        PZBridge.event("alert", S.alert, "зомби в " .. d .. " клетках, пауза")
-        PZBridge.notify("Пауза: зомби в " .. d .. " клетках", false)
+        PZBridge.event("alert", S.alert, "zombie at " .. d .. " tiles, game paused")
+        PZBridge.notify(T("UI_PZBridge_PauseZombie", d), false)
     end
     S.stateDirty = true
 end
@@ -327,8 +329,8 @@ end
 local function checkBites(p)
     local n = p:getBodyDamage():getNumPartsBitten()
     if n > lastBitten then
-        PZBridge.event("bitten", { parts = n }, "укус")
-        PZBridge.notify("Меня укусили!", false)
+        PZBridge.event("bitten", { parts = n }, "bitten")
+        PZBridge.notify(T("UI_PZBridge_Bitten"), false)
     end
     lastBitten = n
 end
@@ -379,7 +381,7 @@ end
 local function onGameStart()
     PZBridge.resetSession()
     if not PZBridge.isSinglePlayer() then
-        U.log("мультиплеер: мост выключен")
+        U.log("multiplayer: bridge disabled")
         return
     end
     S.enabled = true
@@ -389,8 +391,8 @@ local function onGameStart()
     initInbox()
     local p = PZBridge.player()
     if p then lastBitten = p:getBodyDamage():getNumPartsBitten() end
-    PZBridge.event("session_start", { version = PZBridge.VERSION, last_cmd_id = S.lastCmdId }, "PZBridge запущен")
-    PZBridge.chatAdd("mod", "PZBridge " .. PZBridge.VERSION .. ": управление выключено. Включите в этом окне, если хотите дать доступ агенту.")
+    PZBridge.event("session_start", { version = PZBridge.VERSION, last_cmd_id = S.lastCmdId }, "PZBridge started")
+    PZBridge.chatAdd("mod", T("UI_PZBridge_SessionStart", PZBridge.VERSION))
     PZBridge.flush(U.nowMs(), true)
     U.log("started, last cmd id " .. tostring(S.lastCmdId))
 end

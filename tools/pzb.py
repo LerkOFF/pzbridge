@@ -124,9 +124,26 @@ def _maybe_compact(f, max_lines=300):
         f.truncate()
 
 
+_NON_ASCII = re.compile(r"[^\x00-\x7f]")
+
+
+def ascii_escape(text):
+    """Заменить не-ASCII символы на \\uXXXX (UTF-16, с суррогатными парами).
+    Файл команд остаётся чистым ASCII: мод раскрывает \\uXXXX и в JSON,
+    и в позиционных аргументах (say, reply, key=value)."""
+    def esc(m):
+        cp = ord(m.group(0))
+        if cp > 0xFFFF:
+            cp -= 0x10000
+            return "\\u%04x\\u%04x" % (0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF))
+        return "\\u%04x" % cp
+    return _NON_ASCII.sub(esc, text)
+
+
 def send_line(body):
-    """Дописать команду. body: "tool {json}" или "tool a b c". Возвращает id."""
-    body = body.strip().replace("\n", " ")
+    """Дописать команду. body: "tool {json}" или "tool a b c". Возвращает id.
+    Не-ASCII текст экранируется как \\uXXXX."""
+    body = ascii_escape(body.strip().replace("\n", " "))
     os.makedirs(LUA_DIR, exist_ok=True)
     with open(path(F_CMD), "a+", encoding="utf-8") as f:
         if fcntl:
@@ -147,7 +164,7 @@ def send(tool, args=None):
     if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", tool or ""):
         raise ValueError("bad tool name: %r" % tool)
     if args:
-        return send_line("%s %s" % (tool, json.dumps(args, ensure_ascii=False, separators=(",", ":"))))
+        return send_line("%s %s" % (tool, json.dumps(args, ensure_ascii=True, separators=(",", ":"))))
     return send_line(tool)
 
 

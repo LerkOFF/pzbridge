@@ -48,6 +48,9 @@ bleeding, endurance or crowd thresholds are crossed (call resume to continue or 
 If the player presses Stop or disables access, everything stops.
 
 Statuses: running (in progress), ok/done (success), failed, error, interrupted, paused, denied (no access).
+Messages in results, events and state (job.step) are in English; item names come from the game
+in its language. The mod shows its own notes to the player in the game language. Text you send
+(reply_to_player, say) may be in any language: non-ASCII is escaped as \\uXXXX automatically.
 
 Recipes (compose them yourself; there are no hard-coded quests):
 - "Find food": find_items(filter={"category":"food"}, where="all") -> if nothing, search(scope="building",
@@ -58,7 +61,7 @@ Recipes (compose them yourself; there are no hard-coded quests):
   use(how="drink"); in a container take then use; otherwise scan_area(only=["water"]) and drink_from a
   source with clean=true. Mention dirty sources (clean=false) as a fallback: they need boiling.
 - "Kill 10 zombies": fight(until="kills:10") -> poll get_events for fight_progress and kill events, relay
-  progress ("убил 3/10"); on status paused (guard retreat) report the reason and ask the player
+  progress in the player's language (events say "killed 3/10"); on status paused (guard retreat) report the reason and ask the player
   whether to resume. The mod keeps fighting while zombies still chase the player after the goal.
 - "Barricade the house": scan_area(only=["windows","doors"]) -> for each window: barricade(x,y,z)
   (needs hammer, planks, 2 nails each) -> report what was done and what is missing.

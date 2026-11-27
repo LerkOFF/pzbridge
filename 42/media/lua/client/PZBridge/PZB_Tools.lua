@@ -9,7 +9,16 @@ local U = PZBridge.U
 local S = PZBridge.S
 local P = PZBridge.P
 local L = PZBridge.L
-local T = PZBridge.tool
+local Tool = PZBridge.tool
+local T = PZBridge.T
+
+-- door/window -> перевод для окна.
+local KIND_KEYS = { door = "UI_PZBridge_Obj_door", window = "UI_PZBridge_Obj_window" }
+local function kindName(k)
+    local key = KIND_KEYS[tostring(k)]
+    if key then return T(key) end
+    return tostring(k)
+end
 
 ---------------------------------------------------------------------------
 -- Баррикада: ванильный ISBarricadeAction:isValid проверяет
@@ -70,17 +79,17 @@ end
 -- Найти предмет в инвентаре по спецификации.
 local function invItem(p, a, pred)
     local spec = itemSpec(a)
-    if not spec then return nil, "не указан предмет (item_id, filter, fullType или what)" end
+    if not spec then return nil, "no item given (item_id, filter, fullType or what)" end
     if spec.id then
         for _, it in ipairs(P.inventoryItems(p)) do
             if U.try(it, "getID") == spec.id then return it end
         end
-        return nil, "в инвентаре нет предмета с id " .. tostring(spec.id)
+        return nil, "no item in inventory with id " .. tostring(spec.id)
     end
     for _, it in ipairs(P.inventoryItems(p)) do
         if (not spec.filter or P.matches(it, spec.filter)) and (not pred or pred(it)) then return it end
     end
-    return nil, "в инвентаре нет подходящего предмета"
+    return nil, "no matching item in inventory"
 end
 
 local function xyz(a, p)
@@ -119,15 +128,15 @@ end
 -- Восприятие (query: не меняют мир, не прерывают текущую задачу)
 ---------------------------------------------------------------------------
 
-T("get_state", { kind = "query", fn = function(a, ctx, p)
+Tool("get_state", { kind = "query", fn = function(a, ctx, p)
     return "ok", "state", PZBridge.buildState(p, true)
 end })
 
-T("get_access", { kind = "query", always = true, fn = function(a, ctx, p)
+Tool("get_access", { kind = "query", always = true, fn = function(a, ctx, p)
     return "ok", S.access and "access on" or "access off", { access = S.access }
 end })
 
-T("scan_zombies", { kind = "query", params = { "radius" }, fn = function(a, ctx, p)
+Tool("scan_zombies", { kind = "query", params = { "radius" }, fn = function(a, ctx, p)
     local r = U.clamp(num(a.radius) or 20, 1, 60)
     local list = P.strip(P.zombies(p, r, false))
     local known = U.array({})
@@ -145,7 +154,7 @@ T("scan_zombies", { kind = "query", params = { "radius" }, fn = function(a, ctx,
     return "ok", #list .. " zombies within " .. r, { zombies = list, known = known, kills = p:getZombieKills() }
 end })
 
-T("scan_area", { kind = "query", params = { "radius" }, fn = function(a, ctx, p)
+Tool("scan_area", { kind = "query", params = { "radius" }, fn = function(a, ctx, p)
     local only = nil
     if type(a.only) == "table" then
         only = {}
@@ -155,23 +164,23 @@ T("scan_area", { kind = "query", params = { "radius" }, fn = function(a, ctx, p)
     return "ok", "area scanned", res
 end })
 
-T("find_items", { kind = "query", params = { "filter", "where", "radius" }, fn = function(a, ctx, p)
+Tool("find_items", { kind = "query", params = { "filter", "where", "radius" }, fn = function(a, ctx, p)
     local f = a.filter
     if type(f) == "string" then f = { category = f } end
     local items, unexplored = P.findItems(p, f, a.where or "all", num(a.radius) or 10, num(a.limit) or 40)
     return "ok", #items .. " items", { items = items, unexplored_containers = unexplored }
 end })
 
-T("get_item", { kind = "query", params = { "id" }, fn = function(a, ctx, p)
+Tool("get_item", { kind = "query", params = { "id" }, fn = function(a, ctx, p)
     local it, where = P.findItemById(p, a.id or a.item_id, num(a.radius) or 15)
-    if not it then return "error", "предмет не найден рядом" end
+    if not it then return "error", "item not found nearby" end
     if instanceof(it, "IsoWorldInventoryObject") then it = it:getItem() end
     local inf = P.itemInfo(it, true)
     inf.where = where
     return "ok", tostring(inf.name), inf
 end })
 
-T("get_building", { kind = "query", params = { "id" }, fn = function(a, ctx, p)
+Tool("get_building", { kind = "query", params = { "id" }, fn = function(a, ctx, p)
     local b
     if a.id then
         P.eachSquare(p:getX(), p:getY(), p:getZ(), 30, function(sq)
@@ -181,7 +190,7 @@ T("get_building", { kind = "query", params = { "id" }, fn = function(a, ctx, p)
     else
         b = p:getCurrentBuilding()
     end
-    if not b then return "error", a.id and "здание не найдено рядом" or "игрок не в здании" end
+    if not b then return "error", a.id and "building not found nearby" or "player is not in a building" end
     local info = P.buildingInfo(b, p)
     local _, def = P.buildingKey(b)
     local rooms = U.array({})
@@ -206,7 +215,7 @@ T("get_building", { kind = "query", params = { "id" }, fn = function(a, ctx, p)
     return "ok", "building " .. tostring(info.id), info
 end })
 
-T("get_places", { kind = "query", always = false, fn = function(a, ctx, p)
+Tool("get_places", { kind = "query", always = false, fn = function(a, ctx, p)
     local mem = PZBridge.mem()
     local out = U.array({})
     for name, pl in pairs(mem.places) do
@@ -219,7 +228,7 @@ T("get_places", { kind = "query", always = false, fn = function(a, ctx, p)
     return "ok", #out .. " places", { places = out }
 end })
 
-T("get_guard", { kind = "query", always = true, fn = function(a, ctx, p)
+Tool("get_guard", { kind = "query", always = true, fn = function(a, ctx, p)
     return "ok", "guard", PZBridge.guard
 end })
 
@@ -227,9 +236,9 @@ end })
 -- Управление
 ---------------------------------------------------------------------------
 
-T("stop", { kind = "control", fn = function(a, ctx, p)
+Tool("stop", { kind = "control", fn = function(a, ctx, p)
     PZBridge.stopAll("stop command")
-    return "ok", "остановлено"
+    return "ok", "stopped"
 end })
 
 local function setPause(on)
@@ -242,27 +251,27 @@ local function setPause(on)
 end
 PZBridge.setPause = setPause
 
-T("pause", { kind = "control", fn = function(a, ctx, p)
+Tool("pause", { kind = "control", fn = function(a, ctx, p)
     setPause(true)
-    return "ok", "пауза"
+    return "ok", "paused"
 end })
 
-T("unpause", { kind = "control", fn = function(a, ctx, p)
+Tool("unpause", { kind = "control", fn = function(a, ctx, p)
     setPause(false)
     S.alert = nil
-    return "ok", "игра идёт"
+    return "ok", "game running"
 end })
 
-T("resume", { kind = "control", fn = function(a, ctx, p)
+Tool("resume", { kind = "control", fn = function(a, ctx, p)
     local job = S.pausedJob
-    if not job then return "error", "нет задачи на паузе" end
+    if not job then return "error", "no paused job" end
     S.pausedJob = nil
     if isGamePaused() then setPause(false) end
     PZBridge.startJob(job, ctx)
-    return "running", "продолжаю " .. tostring(job.name)
+    return "running", "resuming " .. tostring(job.name)
 end })
 
-T("set_guard", { kind = "control", always = false, fn = function(a, ctx, p)
+Tool("set_guard", { kind = "control", always = false, fn = function(a, ctx, p)
     local changed = {}
     for k, v in pairs(a) do
         if PZBridge.guard[k] ~= nil then
@@ -281,119 +290,119 @@ T("set_guard", { kind = "control", always = false, fn = function(a, ctx, p)
     return "ok", "guard updated", { guard = PZBridge.guard, changed = changed }
 end })
 
-T("autopause", { kind = "control", params = { "value", "distance" }, fn = function(a, ctx, p)
+Tool("autopause", { kind = "control", params = { "value", "distance" }, fn = function(a, ctx, p)
     local v = tostring(a.value or "on")
     PZBridge.guard.autopause = (v == "on" or v == "true" or v == "1")
     if num(a.distance) then PZBridge.guard.pause_distance = num(a.distance) end
     return "ok", "autopause " .. (PZBridge.guard.autopause and "on" or "off")
 end })
 
-T("autoflee", { kind = "control", params = { "value" }, fn = function(a, ctx, p)
+Tool("autoflee", { kind = "control", params = { "value" }, fn = function(a, ctx, p)
     local v = tostring(a.value or "on")
     PZBridge.guard.autoflee = (v == "on" or v == "true" or v == "1")
     return "ok", "autoflee " .. (PZBridge.guard.autoflee and "on" or "off")
 end })
 
-T("reply", { kind = "control", always = true, params = { "text" }, fn = function(a, ctx, p)
+Tool("reply", { kind = "control", always = true, params = { "text" }, fn = function(a, ctx, p)
     local text = tostring(a.text or "")
-    if text == "" then return "error", "пустой текст" end
+    if text == "" then return "error", "empty text" end
     PZBridge.chatAdd("agent", text)
     if a.say ~= false then pcall(p.Say, p, text) end
     PZBridge.event("reply", { text = text }, text)
-    return "ok", "отправлено"
+    return "ok", "sent"
 end })
 
-T("say", { kind = "control", params = { "text" }, fn = function(a, ctx, p)
+Tool("say", { kind = "control", params = { "text" }, fn = function(a, ctx, p)
     p:Say(tostring(a.text or ""))
-    return "ok", "сказал"
+    return "ok", "said"
 end })
 
-T("mark_place", { kind = "control", params = { "name", "x", "y", "z" }, fn = function(a, ctx, p)
-    if not a.name or a.name == "" then return "error", "нужно имя места" end
+Tool("mark_place", { kind = "control", params = { "name", "x", "y", "z" }, fn = function(a, ctx, p)
+    if not a.name or a.name == "" then return "error", "place name required" end
     local x, y, z = num(a.x) or math.floor(p:getX()), num(a.y) or math.floor(p:getY()), num(a.z) or math.floor(p:getZ())
     local mem = PZBridge.mem()
     local b = P.square(x, y, z)
     local bkey = b and b:getBuilding() and P.buildingKey(b:getBuilding()) or nil
     mem.places[tostring(a.name)] = { x = x, y = y, z = z, note = a.note, building = bkey, t = PZBridge.gameTimeStr() }
-    return "ok", "место отмечено: " .. tostring(a.name), mem.places[tostring(a.name)]
+    return "ok", "place marked: " .. tostring(a.name), mem.places[tostring(a.name)]
 end })
 
-T("forget_place", { kind = "control", params = { "name" }, fn = function(a, ctx, p)
+Tool("forget_place", { kind = "control", params = { "name" }, fn = function(a, ctx, p)
     local mem = PZBridge.mem()
     mem.places[tostring(a.name)] = nil
-    return "ok", "забыл место"
+    return "ok", "place forgotten"
 end })
 
-T("forget_visited", { kind = "control", fn = function(a, ctx, p)
+Tool("forget_visited", { kind = "control", fn = function(a, ctx, p)
     local mem = PZBridge.mem()
     mem.visitedBuildings = {}
     mem.visitedContainers = {}
     if a.known then mem.knownContainers = {} end
-    return "ok", "память посещённого очищена"
+    return "ok", "visited memory cleared"
 end })
 
 ---------------------------------------------------------------------------
 -- Движение и циклы
 ---------------------------------------------------------------------------
 
-T("move_to", { params = { "x", "y", "z", "mode" }, fn = function(a, ctx, p)
+Tool("move_to", { params = { "x", "y", "z", "mode" }, fn = function(a, ctx, p)
     local x, y, z = xyz(a, p)
     if a.place then
         local pl = PZBridge.mem().places[tostring(a.place)]
-        if not pl then return "error", "нет места " .. tostring(a.place) end
+        if not pl then return "error", "no such place: " .. tostring(a.place) end
         x, y, z = pl.x, pl.y, pl.z
     end
-    if not x or not y then return "error", "нужны x и y (или place)" end
+    if not x or not y then return "error", "x and y required (or place)" end
     return L.startMoveTo(ctx, p, x, y, z, a)
 end })
 
-T("move_rel", { params = { "dx", "dy", "mode" }, fn = function(a, ctx, p)
+Tool("move_rel", { params = { "dx", "dy", "mode" }, fn = function(a, ctx, p)
     local dx, dy = num(a.dx) or 0, num(a.dy) or 0
     return L.startMoveTo(ctx, p, p:getX() + dx, p:getY() + dy, p:getZ(), a)
 end })
 
-T("flee", { params = { "distance", "mode" }, fn = function(a, ctx, p)
+Tool("flee", { params = { "distance", "mode" }, fn = function(a, ctx, p)
     return L.startFlee(ctx, p, { distance = num(a.distance), mode = a.mode, x = num(a.x), y = num(a.y) })
 end })
 
-T("search", { params = { "scope", "target" }, fn = function(a, ctx, p)
+Tool("search", { params = { "scope", "target" }, fn = function(a, ctx, p)
     return L.startSearch(ctx, p, a)
 end })
 
-T("fight", { params = { "until", "radius" }, fn = function(a, ctx, p)
+Tool("fight", { params = { "until", "radius" }, fn = function(a, ctx, p)
     if a.kills and not a["until"] then a["until"] = "kills:" .. tostring(a.kills) end
     if a.radius then a.radius = num(a.radius) end
     return L.startFight(ctx, p, a)
 end })
 
-T("wait", { params = { "seconds" }, fn = function(a, ctx, p)
+Tool("wait", { params = { "seconds" }, fn = function(a, ctx, p)
     return L.startWait(ctx, p, { seconds = num(a.seconds), game_minutes = num(a.game_minutes), interrupt_on_threat = a.interrupt_on_threat })
 end })
 
-T("face", { params = { "x", "y" }, fn = function(a, ctx, p)
+Tool("face", { params = { "x", "y" }, fn = function(a, ctx, p)
     local x, y = num(a.x), num(a.y)
-    if not x or not y then return "error", "нужны x и y" end
+    if not x or not y then return "error", "x and y required" end
     p:faceLocation(x, y)
-    return "ok", "повернулся"
+    return "ok", "turned"
 end })
 
-T("attack", { params = { "target" }, fn = function(a, ctx, p)
+Tool("attack", { params = { "target" }, fn = function(a, ctx, p)
     local zs = P.zombies(p, 4, true)
     local target
     for _, z in ipairs(zs) do
         if a.target == nil or z.id == num(a.target) then target = z; break end
     end
-    if not target then return "error", "рядом нет зомби" end
-    if target.dist > L.weaponRange(p) + 0.6 then return "error", "зомби слишком далеко (" .. target.dist .. ")" end
-    if L.attack(p, target.obj) then return "ok", "удар по зомби " .. tostring(target.id) end
-    return "error", "атака не началась"
+    if not target then return "error", "no zombies nearby" end
+    if target.dist > L.weaponRange(p) + 0.6 then return "error", "zombie too far (" .. target.dist .. ")" end
+    if L.attack(p, target.obj) then return "ok", "attacked zombie " .. tostring(target.id) end
+    return "error", "attack did not start"
 end })
 
 ---------------------------------------------------------------------------
 -- Предметы
 ---------------------------------------------------------------------------
 
-T("take", { params = { "what", "from" }, fn = function(a, ctx, p)
+Tool("take", { params = { "what", "from" }, fn = function(a, ctx, p)
     local spec = itemSpec(a) or { all = true }
     local count = num(a.count) or (spec.all and 999) or 1
     local from = a.from
@@ -402,14 +411,14 @@ T("take", { params = { "what", "from" }, fn = function(a, ctx, p)
     local items = {}
     if from and from ~= "nearby" and from ~= "floor" then
         srcC, srcO = P.resolveContainer(from)
-        if not srcC then return "error", "контейнер " .. tostring(from) .. " не найден" end
+        if not srcC then return "error", "container " .. tostring(from) .. " not found" end
         if not U.try(srcC, "isExplored") then
             local d = U.dist(srcO:getX() + 0.5, srcO:getY() + 0.5, p:getX(), p:getY())
             if d < 2 then
                 L.exploreContainer(srcC, p)
                 L.rememberContainer(from, srcC)
             else
-                return "error", "контейнер ещё не осмотрен: сначала search scope=container target=" .. tostring(from)
+                return "error", "container not explored yet: run search scope=container target=" .. tostring(from) .. " first"
             end
         end
         for _, it in ipairs(P.containerItems(srcC)) do
@@ -432,13 +441,13 @@ T("take", { params = { "what", "from" }, fn = function(a, ctx, p)
             end
         end
     end
-    if #items == 0 then return "error", "подходящих предметов нет" end
+    if #items == 0 then return "error", "no matching items" end
     -- берём только из одного источника за команду (иначе ванильная ходьба сбросит очередь)
     local first = items[1]
     local taken = U.array({})
     if instanceof(first, "IsoWorldInventoryObject") then
         local sq = first:getSquare()
-        if not luautils.walkAdj(p, sq, true) then return "error", "не могу подойти" end
+        if not luautils.walkAdj(p, sq, true) then return "error", "cannot get close" end
         for i = 1, math.min(count, #items) do
             local wo = items[i]
             if instanceof(wo, "IsoWorldInventoryObject") and wo:getSquare() == sq then
@@ -449,8 +458,8 @@ T("take", { params = { "what", "from" }, fn = function(a, ctx, p)
         end
     else
         local c = first:getContainer()
-        if c == p:getInventory() then return "error", "предмет уже в инвентаре" end
-        if not luautils.walkToContainer(c, pnum(p)) then return "error", "не могу подойти к контейнеру" end
+        if c == p:getInventory() then return "error", "item already in inventory" end
+        if not luautils.walkToContainer(c, pnum(p)) then return "error", "cannot reach the container" end
         for i = 1, math.min(count, #items) do
             local it = items[i]
             if not instanceof(it, "IsoWorldInventoryObject") and it:getContainer() == c then
@@ -461,14 +470,14 @@ T("take", { params = { "what", "from" }, fn = function(a, ctx, p)
     end
     ctx.data = { taken = taken }
     return L.actionJob(ctx, "take", function(job, pl)
-        return "done", "взял " .. #taken, { taken = taken }
-    end, "беру " .. #taken)
+        return "done", "took " .. #taken, { taken = taken }
+    end, "taking " .. #taken, T("UI_PZBridge_StepTake", #taken))
 end })
 
-T("loot", { params = { "x", "y", "z", "what" }, fn = function(a, ctx, p)
+Tool("loot", { params = { "x", "y", "z", "what" }, fn = function(a, ctx, p)
     local x, y, z = xyz(a, p)
     local sq = P.square(x, y, z)
-    if not sq then return "error", "клетка не найдена" end
+    if not sq then return "error", "square not found" end
     local objs = sq:getObjects()
     for i = 0, objs:size() - 1 do
         local o = objs:get(i)
@@ -478,53 +487,58 @@ T("loot", { params = { "x", "y", "z", "what" }, fn = function(a, ctx, p)
             return PZBridge.tools.take.fn(na, ctx, p)
         end
     end
-    return "error", "на клетке нет контейнера"
+    return "error", "no container on the square"
 end })
 
-T("drop", { params = { "what" }, fn = function(a, ctx, p)
+Tool("drop", { params = { "what" }, fn = function(a, ctx, p)
     local it, err = invItem(p, a)
     if not it then return "error", err end
     ISInventoryPaneContextMenu.dropItem(it, pnum(p))
-    return L.actionJob(ctx, "drop", nil, "бросаю " .. tostring(it:getDisplayName()))
+    local nm = tostring(it:getDisplayName())
+    return L.actionJob(ctx, "drop", nil, "dropping " .. nm, T("UI_PZBridge_StepDrop", nm))
 end })
 
-T("transfer", { params = { "what", "to" }, fn = function(a, ctx, p)
+Tool("transfer", { params = { "what", "to" }, fn = function(a, ctx, p)
     local it, err = invItem(p, a)
     if not it then return "error", err end
     local dest = P.resolveContainer(a.to)
-    if not dest then return "error", "контейнер назначения не найден" end
-    if not luautils.walkToContainer(dest, pnum(p)) then return "error", "не могу подойти к контейнеру" end
+    if not dest then return "error", "destination container not found" end
+    if not luautils.walkToContainer(dest, pnum(p)) then return "error", "cannot reach the container" end
     ISTimedActionQueue.add(ISInventoryTransferUtil.newInventoryTransferAction(p, it, it:getContainer(), dest))
-    return L.actionJob(ctx, "transfer", nil, "перекладываю " .. tostring(it:getDisplayName()))
+    local nm = tostring(it:getDisplayName())
+    return L.actionJob(ctx, "transfer", nil, "transferring " .. nm, T("UI_PZBridge_StepTransfer", nm))
 end })
 
-T("equip", { params = { "what", "slot" }, fn = function(a, ctx, p)
+Tool("equip", { params = { "what", "slot" }, fn = function(a, ctx, p)
     local it, err = invItem(p, a)
     if not it then return "error", err end
     local slot = a.slot or "primary"
     local two = slot == "both" or (U.try(it, "isTwoHandWeapon") == true) or (U.try(it, "isRequiresEquippedBothHands") == true)
     ISInventoryPaneContextMenu.equipWeapon(it, slot ~= "secondary", two, pnum(p))
+    local nm = tostring(it:getDisplayName())
     return L.actionJob(ctx, "equip", function(job, pl)
-        if pl:getPrimaryHandItem() == it or pl:getSecondaryHandItem() == it then return "done", "в руках: " .. tostring(it:getDisplayName()) end
-        return "failed", "не удалось взять в руки"
-    end, "беру в руки " .. tostring(it:getDisplayName()))
+        if pl:getPrimaryHandItem() == it or pl:getSecondaryHandItem() == it then return "done", "in hands: " .. nm end
+        return "failed", "could not equip"
+    end, "equipping " .. nm, T("UI_PZBridge_StepEquip", nm))
 end })
 
-T("unequip", { params = { "what" }, fn = function(a, ctx, p)
+Tool("unequip", { params = { "what" }, fn = function(a, ctx, p)
     local it
     if a.slot == "secondary" then it = p:getSecondaryHandItem()
     elseif itemSpec(a) then it = invItem(p, a)
     else it = p:getPrimaryHandItem() or p:getSecondaryHandItem() end
-    if not it then return "ok", "руки уже свободны" end
+    if not it then return "ok", "hands already empty" end
     ISInventoryPaneContextMenu.unequipItem(it, pnum(p))
-    return L.actionJob(ctx, "unequip", nil, "убираю " .. tostring(it:getDisplayName()))
+    local nm = tostring(it:getDisplayName())
+    return L.actionJob(ctx, "unequip", nil, "unequipping " .. nm, T("UI_PZBridge_StepUnequip", nm))
 end })
 
-T("wear", { params = { "what" }, fn = function(a, ctx, p)
+Tool("wear", { params = { "what" }, fn = function(a, ctx, p)
     local it, err = invItem(p, a)
     if not it then return "error", err end
     ISInventoryPaneContextMenu.wearItem(it, pnum(p))
-    return L.actionJob(ctx, "wear", nil, "надеваю " .. tostring(it:getDisplayName()))
+    local nm = tostring(it:getDisplayName())
+    return L.actionJob(ctx, "wear", nil, "putting on " .. nm, T("UI_PZBridge_StepWear", nm))
 end })
 
 local function pickWoundPart(p, partName)
@@ -542,16 +556,17 @@ local function pickWoundPart(p, partName)
     return best
 end
 
-T("use", { params = { "what", "how" }, fn = function(a, ctx, p)
+Tool("use", { params = { "what", "how" }, fn = function(a, ctx, p)
     local how = a.how or "eat"
     local percent = num(a.percent) or 1
     local it, err
     if how == "eat" then
         it, err = invItem(p, itemSpec(a) and a or { filter = { category = "food" } })
         if not it then return "error", err end
-        if not instanceof(it, "Food") then return "error", "это не еда" end
+        if not instanceof(it, "Food") then return "error", "this is not food" end
         ISInventoryPaneContextMenu.eatItem(it, percent, pnum(p))
-        return L.actionJob(ctx, "use", nil, "ем " .. tostring(it:getDisplayName()))
+        local nm = tostring(it:getDisplayName())
+        return L.actionJob(ctx, "use", nil, "eating " .. nm, T("UI_PZBridge_StepEat", nm))
     elseif how == "drink" then
         it, err = invItem(p, itemSpec(a) and a or { filter = { category = "drink" } })
         if not it then
@@ -560,40 +575,44 @@ T("use", { params = { "what", "how" }, fn = function(a, ctx, p)
         if not it then return "error", err end
         local fc = U.try(it, "getFluidContainer")
         if fc and not fc:isEmpty() then
-            if fc:isTainted() and not a.allow_dirty then return "error", "вода заражена, нужно allow_dirty=true или кипятить" end
+            if fc:isTainted() and not a.allow_dirty then return "error", "water is tainted: use allow_dirty=true or boil it" end
             ISInventoryPaneContextMenu.onDrinkFluid(it, percent, p)
         elseif instanceof(it, "Food") then
             ISInventoryPaneContextMenu.eatItem(it, percent, pnum(p))
         else
-            return "error", "из этого нельзя пить"
+            return "error", "cannot drink from this"
         end
-        return L.actionJob(ctx, "use", nil, "пью " .. tostring(it:getDisplayName()))
+        local nm = tostring(it:getDisplayName())
+        return L.actionJob(ctx, "use", nil, "drinking " .. nm, T("UI_PZBridge_StepDrink", nm))
     elseif how == "read" then
         it, err = invItem(p, a)
         if not it then return "error", err end
         ISInventoryPaneContextMenu.readItem(it, pnum(p))
-        return L.actionJob(ctx, "use", nil, "читаю " .. tostring(it:getDisplayName()))
+        local nm = tostring(it:getDisplayName())
+        return L.actionJob(ctx, "use", nil, "reading " .. nm, T("UI_PZBridge_StepRead", nm))
     elseif how == "pill" then
         it, err = invItem(p, a)
         if not it then return "error", err end
         ISInventoryPaneContextMenu.takePill(it, pnum(p))
-        return L.actionJob(ctx, "use", nil, "принимаю " .. tostring(it:getDisplayName()))
+        local nm = tostring(it:getDisplayName())
+        return L.actionJob(ctx, "use", nil, "taking pill " .. nm, T("UI_PZBridge_StepPill", nm))
     elseif how == "apply_bandage" or how == "bandage" then
         it, err = invItem(p, itemSpec(a) and a or { filter = { category = "medical" } }, function(x) return U.try(x, "isCanBandage") == true end)
-        if not it then return "error", err or "нет бинта" end
+        if not it then return "error", err or "no bandage" end
         local part = pickWoundPart(p, a.part)
-        if not part then return "error", "нет ран без повязки" end
+        if not part then return "error", "no unbandaged wounds" end
         ISInventoryPaneContextMenu.transferIfNeeded(p, it)
         ISTimedActionQueue.add(ISApplyBandage:new(p, p, it, part, true))
+        local pname = tostring(part:getType())
         return L.actionJob(ctx, "use", function(job, pl)
-            if part:bandaged() then return "done", "перевязал " .. tostring(part:getType()) end
-            return "failed", "повязка не наложена"
-        end, "перевязываю " .. tostring(part:getType()))
+            if part:bandaged() then return "done", "bandaged " .. pname end
+            return "failed", "bandage not applied"
+        end, "bandaging " .. pname, T("UI_PZBridge_StepBandage", pname))
     end
-    return "error", "неизвестный способ how=" .. tostring(how) .. " (eat, drink, read, pill, apply_bandage)"
+    return "error", "unknown how=" .. tostring(how) .. " (eat, drink, read, pill, apply_bandage)"
 end })
 
-T("eat", { params = { "what" }, fn = function(a, ctx, p)
+Tool("eat", { params = { "what" }, fn = function(a, ctx, p)
     a.how = "eat"
     return PZBridge.tools.use.fn(a, ctx, p)
 end })
@@ -612,20 +631,21 @@ local function waterSource(p, a)
     return o, sq
 end
 
-T("drink_from", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
+Tool("drink_from", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local o, sq = waterSource(p, a)
-    if not o then return "error", "источника воды рядом нет" end
+    if not o then return "error", "no water source nearby" end
     if U.try(o, "isTaintedWater") and not a.allow_dirty then
-        return "error", "вода в источнике заражена (allow_dirty=true, чтобы пить всё равно)"
+        return "error", "water source is tainted (allow_dirty=true to drink anyway)"
     end
-    if (U.try(o, "getFluidAmount") or 0) <= 0 then return "error", "в источнике нет воды" end
+    if (U.try(o, "getFluidAmount") or 0) <= 0 then return "error", "water source is empty" end
     local thirst = CharacterStat and p:getStats():get(CharacterStat.THIRST) or 0
-    if thirst < 0.05 then return "error", "персонаж не хочет пить" end
+    if thirst < 0.05 then return "error", "character is not thirsty" end
     ISWorldObjectContextMenu.onDrink(nil, o, pnum(p))
-    return L.actionJob(ctx, "drink_from", nil, "пью из " .. P.objectName(o))
+    local on = tostring(P.objectName(o))
+    return L.actionJob(ctx, "drink_from", nil, "drinking from " .. on, T("UI_PZBridge_StepDrinkFrom", on))
 end })
 
-T("drink", { params = { "what" }, fn = function(a, ctx, p)
+Tool("drink", { params = { "what" }, fn = function(a, ctx, p)
     a.how = "drink"
     local st, msg, data = PZBridge.tools.use.fn(a, ctx, p)
     if st ~= "error" then return st, msg, data end
@@ -633,20 +653,20 @@ T("drink", { params = { "what" }, fn = function(a, ctx, p)
     return PZBridge.tools.drink_from.fn({ radius = 10 }, ctx, p)
 end })
 
-T("fill", { params = { "what", "x", "y", "z" }, fn = function(a, ctx, p)
+Tool("fill", { params = { "what", "x", "y", "z" }, fn = function(a, ctx, p)
     local it, err = invItem(p, itemSpec(a) and a or { filter = { category = "water_container" } }, function(x)
         local fc = U.try(x, "getFluidContainer")
         return fc ~= nil and not fc:isFull()
     end)
     if not it then return "error", err end
     local o = waterSource(p, a)
-    if not o then return "error", "источника воды рядом нет" end
+    if not o then return "error", "no water source nearby" end
     local tainted = U.try(o, "isTaintedWater") == true
-    if tainted and not a.allow_dirty then return "error", "вода в источнике заражена (allow_dirty=true)" end
+    if tainted and not a.allow_dirty then return "error", "water source is tainted (allow_dirty=true)" end
     ISInventoryPaneContextMenu.transferIfNeeded(p, it)
-    if not luautils.walkAdjObject(p, o, true, true) then return "error", "не могу подойти к источнику" end
+    if not luautils.walkAdjObject(p, o, true, true) then return "error", "cannot reach the water source" end
     ISTimedActionQueue.add(ISTakeWaterAction:new(p, it, o, tainted))
-    return L.actionJob(ctx, "fill", nil, "набираю воду")
+    return L.actionJob(ctx, "fill", nil, "filling with water", T("UI_PZBridge_StepFill"))
 end })
 
 ---------------------------------------------------------------------------
@@ -655,9 +675,9 @@ end })
 
 local function doorOrWindow(a, p, kind)
     local x, y, z = xyz(a, p)
-    if not x or not y then return nil, "нужны x y z" end
+    if not x or not y then return nil, "x y z required" end
     local o, k, sq = P.findObjectAt(x, y, z, kind or a.kind)
-    if not o then return nil, "на клетке нет двери или окна" end
+    if not o then return nil, "no door or window on the square" end
     return o, k, sq
 end
 
@@ -665,9 +685,9 @@ local function openClose(wantOpen)
     return function(a, ctx, p)
         local o, k, sq = doorOrWindow(a, p)
         if not o then return "error", k end
-        if (U.try(o, "IsOpen") == true) == wantOpen then return "ok", wantOpen and "уже открыто" or "уже закрыто" end
-        if wantOpen and U.try(o, "isBarricaded") then return "error", "заколочено" end
-        if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "не могу подойти" end
+        if (U.try(o, "IsOpen") == true) == wantOpen then return "ok", wantOpen and "already open" or "already closed" end
+        if wantOpen and U.try(o, "isBarricaded") then return "error", "barricaded" end
+        if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
         if k == "door" then
             ISTimedActionQueue.add(ISOpenCloseDoor:new(p, o))
         else
@@ -677,53 +697,54 @@ local function openClose(wantOpen)
             ISTimedActionQueue.add(ISOpenCloseWindow:new(p, o))
         end
         return L.actionJob(ctx, wantOpen and "open" or "close", function(job, pl)
-            if (U.try(o, "IsOpen") == true) == wantOpen then return "done", wantOpen and "открыто" or "закрыто" end
+            if (U.try(o, "IsOpen") == true) == wantOpen then return "done", wantOpen and "opened" or "closed" end
             local locked = U.try(o, "isLocked") or U.try(o, "isLockedByKey") or U.try(o, "isPermaLocked")
-            return "failed", locked and "заперто" or "не получилось"
-        end, (wantOpen and "открываю " or "закрываю ") .. k)
+            return "failed", locked and "locked" or "did not work"
+        end, (wantOpen and "opening " or "closing ") .. tostring(k),
+            T(wantOpen and "UI_PZBridge_StepOpen" or "UI_PZBridge_StepClose", kindName(k)))
     end
 end
 
-T("open", { params = { "x", "y", "z", "kind" }, fn = openClose(true) })
-T("close", { params = { "x", "y", "z", "kind" }, fn = openClose(false) })
+Tool("open", { params = { "x", "y", "z", "kind" }, fn = openClose(true) })
+Tool("close", { params = { "x", "y", "z", "kind" }, fn = openClose(false) })
 
 local function lockUnlock(lock)
     return function(a, ctx, p)
         local o, k, sq = doorOrWindow(a, p, "door")
         if not o then return "error", k end
-        if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "не могу подойти" end
+        if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
         ISTimedActionQueue.add(ISLockDoor:new(p, o, lock))
         return L.actionJob(ctx, lock and "lock" or "unlock", function(job, pl)
             local locked = (U.try(o, "isLocked") == true) or (U.try(o, "isLockedByKey") == true)
-            if locked == lock then return "done", lock and "заперто" or "отперто" end
-            return "failed", "нет ключа или не получилось"
-        end, lock and "запираю" or "отпираю")
+            if locked == lock then return "done", lock and "locked" or "unlocked" end
+            return "failed", "no key or did not work"
+        end, lock and "locking" or "unlocking", T(lock and "UI_PZBridge_StepLock" or "UI_PZBridge_StepUnlock"))
     end
 end
 
-T("lock", { params = { "x", "y", "z" }, fn = lockUnlock(true) })
-T("unlock", { params = { "x", "y", "z" }, fn = lockUnlock(false) })
+Tool("lock", { params = { "x", "y", "z" }, fn = lockUnlock(true) })
+Tool("unlock", { params = { "x", "y", "z" }, fn = lockUnlock(false) })
 
-T("climb_window", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
+Tool("climb_window", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local o, k, sq = doorOrWindow(a, p, "window")
     if not o then return "error", k end
-    if U.try(o, "isBarricaded") then return "error", "окно заколочено" end
-    if not (U.try(o, "IsOpen") or U.try(o, "isSmashed")) then return "error", "окно закрыто: сначала open или smash_window" end
-    if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "не могу подойти" end
+    if U.try(o, "isBarricaded") then return "error", "window is barricaded" end
+    if not (U.try(o, "IsOpen") or U.try(o, "isSmashed")) then return "error", "window is closed: open or smash_window first" end
+    if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
     ISTimedActionQueue.add(ISClimbThroughWindow:new(p, o, 0))
-    return L.actionJob(ctx, "climb_window", nil, "лезу в окно")
+    return L.actionJob(ctx, "climb_window", nil, "climbing through window", T("UI_PZBridge_StepClimb"))
 end })
 
-T("smash_window", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
+Tool("smash_window", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local o, k, sq = doorOrWindow(a, p, "window")
     if not o then return "error", k end
-    if U.try(o, "isSmashed") then return "ok", "уже разбито" end
-    if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "не могу подойти" end
+    if U.try(o, "isSmashed") then return "ok", "already smashed" end
+    if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
     ISTimedActionQueue.add(ISSmashWindow:new(p, o))
-    return L.actionJob(ctx, "smash_window", nil, "разбиваю окно")
+    return L.actionJob(ctx, "smash_window", nil, "smashing window", T("UI_PZBridge_StepSmash"))
 end })
 
-T("barricade", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
+Tool("barricade", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local o, k, sq = doorOrWindow(a, p, "barricadable")
     if not o then return "error", k end
     local inv = p:getInventory()
@@ -731,13 +752,13 @@ T("barricade", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local plank = inv:getFirstTypeRecurse("Base.Plank")
     local nails = inv:getItemCount("Base.Nails", true)
     local missing = {}
-    if not hammer then missing[#missing + 1] = "молоток" end
-    if not plank then missing[#missing + 1] = "доска" end
-    if nails < 2 then missing[#missing + 1] = "гвозди (нужно 2)" end
-    if #missing > 0 then return "error", "не хватает: " .. table.concat(missing, ", ") end
-    if P.isDoor(o) and U.try(o, "IsOpen") then return "error", "сначала закрой дверь" end
+    if not hammer then missing[#missing + 1] = "hammer" end
+    if not plank then missing[#missing + 1] = "plank" end
+    if nails < 2 then missing[#missing + 1] = "nails (need 2)" end
+    if #missing > 0 then return "error", "missing: " .. table.concat(missing, ", ") end
+    if P.isDoor(o) and U.try(o, "IsOpen") then return "error", "close the door first" end
     local before = barricadeCount(o)
-    if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "не могу подойти" end
+    if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
     ISInventoryPaneContextMenu.transferIfNeeded(p, hammer)
     ISInventoryPaneContextMenu.transferIfNeeded(p, plank)
     if p:getPrimaryHandItem() ~= hammer then
@@ -750,27 +771,27 @@ T("barricade", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     return L.actionJob(ctx, "barricade", function(job, pl)
         local after = barricadeCount(o)
         if after > before or (before == 0 and U.try(o, "isBarricaded")) then
-            return "done", "прибил доску (" .. after .. ")"
+            return "done", "plank nailed (" .. after .. ")"
         end
-        return "failed", "доска не прибита"
-    end, "заколачиваю")
+        return "failed", "plank not nailed"
+    end, "barricading", T("UI_PZBridge_StepBarricade"))
 end })
 
-T("unbarricade", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
+Tool("unbarricade", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local o, k, sq = doorOrWindow(a, p, "barricadable")
     if not o then return "error", k end
-    if not U.try(o, "isBarricaded") then return "ok", "не заколочено" end
+    if not U.try(o, "isBarricaded") then return "ok", "not barricaded" end
     local tool = p:getInventory():getFirstEvalRecurse(function(it)
         return it:hasTag(ItemTag.REMOVE_BARRICADE) and not it:isBroken()
     end)
-    if not tool then return "error", "нет инструмента (лом, гвоздодёр)" end
-    if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "не могу подойти" end
+    if not tool then return "error", "no tool (crowbar or claw hammer)" end
+    if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
     ISInventoryPaneContextMenu.transferIfNeeded(p, tool)
     if p:getPrimaryHandItem() ~= tool then
         ISTimedActionQueue.add(ISEquipWeaponAction:new(p, tool, 50, true, false))
     end
     ISTimedActionQueue.add(ISUnbarricadeAction:new(p, o))
-    return L.actionJob(ctx, "unbarricade", nil, "отрываю доски")
+    return L.actionJob(ctx, "unbarricade", nil, "removing planks", T("UI_PZBridge_StepUnbarricade"))
 end })
 
 ---------------------------------------------------------------------------
@@ -787,31 +808,31 @@ local function findBed(p, a)
     return o
 end
 
-T("sleep", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
+Tool("sleep", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local bed = findBed(p, a)
     if a.floor then bed = nil end
     ISWorldObjectContextMenu.onConfirmSleep(nil, { internal = "YES" }, pnum(p), bed)
     return L.actionJob(ctx, "sleep", function(job, pl)
-        if pl:isAsleep() then return "done", "сплю" .. (bed and " на кровати" or " на полу") end
-        return "failed", "не удалось уснуть (зомби рядом, боль, паника или не устал)"
-    end, "ложусь спать")
+        if pl:isAsleep() then return "done", "sleeping" .. (bed and " in bed" or " on the floor") end
+        return "failed", "could not fall asleep (zombies nearby, pain, panic or not tired)"
+    end, "going to sleep", T("UI_PZBridge_StepSleep"))
 end })
 
-T("rest", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
+Tool("rest", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local bed = findBed(p, a)
     if bed then
         ISWorldObjectContextMenu.onRest(bed, pnum(p))
     else
         ISTimedActionQueue.add(ISSitOnGround:new(p, nil))
     end
-    return L.actionJob(ctx, "rest", function(job, pl) return "done", "отдыхаю" end, "отдыхаю")
+    return L.actionJob(ctx, "rest", function(job, pl) return "done", "resting" end, "resting", T("UI_PZBridge_StepRest"))
 end })
 
 ---------------------------------------------------------------------------
 -- Старые позиционные имена
 ---------------------------------------------------------------------------
 
-T("walk", { params = { "x", "y", "z", "mode" }, fn = function(a, ctx, p) return PZBridge.tools.move_to.fn(a, ctx, p) end })
-T("walk_rel", { params = { "dx", "dy", "mode" }, fn = function(a, ctx, p) return PZBridge.tools.move_rel.fn(a, ctx, p) end })
+Tool("walk", { params = { "x", "y", "z", "mode" }, fn = function(a, ctx, p) return PZBridge.tools.move_to.fn(a, ctx, p) end })
+Tool("walk_rel", { params = { "dx", "dy", "mode" }, fn = function(a, ctx, p) return PZBridge.tools.move_rel.fn(a, ctx, p) end })
 
 return PZBridge.tools

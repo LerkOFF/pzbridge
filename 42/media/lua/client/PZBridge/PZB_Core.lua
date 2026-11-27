@@ -5,6 +5,7 @@ require "PZBridge/PZB_Util"
 
 PZBridge = PZBridge or {}
 local U = PZBridge.U
+local T = PZBridge.T
 
 PZBridge.VERSION = "0.1.0"
 
@@ -227,7 +228,9 @@ end
 ---------------------------------------------------------------------------
 -- Менеджер задач. Одна активная задача (job) за раз.
 -- job = { name = "move_to", update = function(job, player, now) -> nil | status, msg, data,
---         stop = function(job, player) (необязательно), step = "текст для окна" }
+--         stop = function(job, player) (необязательно),
+--         step = "english text" (для агента, попадает в state.json),
+--         stepUI = T("UI_PZBridge_...") (для окна F9; если нет, окно показывает step) }
 ---------------------------------------------------------------------------
 
 function PZBridge.stopJob(reason, status)
@@ -293,8 +296,8 @@ function PZBridge.setAccess(on)
     if not on then
         PZBridge.stopAll("access disabled")
     end
-    PZBridge.event("access", { access = on }, on and "Управление разрешено" or "Управление запрещено")
-    PZBridge.chatAdd("mod", on and "Управление агенту разрешено." or "Управление агенту запрещено.")
+    PZBridge.event("access", { access = on }, on and "control allowed by player" or "control denied by player")
+    PZBridge.chatAdd("mod", on and T("UI_PZBridge_AccessOn") or T("UI_PZBridge_AccessOff"))
     S.stateDirty = true
 end
 

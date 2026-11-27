@@ -12,6 +12,7 @@ require "PZBridge/PZB_Core"
 
 local U = PZBridge.U
 local S = PZBridge.S
+local T = PZBridge.T
 PZBridge.UI = PZBridge.UI or {}
 local UI = PZBridge.UI
 
@@ -20,13 +21,14 @@ local COLORS = {
     agent  = { 0.6, 1.0, 0.6 },
     mod    = { 0.85, 0.85, 0.85 },
 }
-local WHO = { player = "Я", agent = "Агент", mod = "Мод" }
+-- Подписи в логе окна (переводы в Translate/<язык>/UI.json).
+local WHO = { player = "UI_PZBridge_WhoPlayer", agent = "UI_PZBridge_WhoAgent", mod = "UI_PZBridge_WhoMod" }
 
 PZBridgeWindow = ISCollapsableWindow:derive("PZBridgeWindow")
 
 function PZBridgeWindow:new(x, y, w, h)
     local o = ISCollapsableWindow.new(self, x, y, w, h)
-    o.title = "Доступ агента"
+    o.title = T("UI_PZBridge_Title")
     o.minimumWidth = 360
     o.minimumHeight = 300
     return o
@@ -42,24 +44,24 @@ function PZBridgeWindow:createChildren()
     self.tick = ISTickBox:new(pad, y, 220, fh + 4, "", self, PZBridgeWindow.onAccessTick)
     self.tick:initialise()
     self.tick:instantiate()
-    self.tick:addOption("Разрешить управление")
+    self.tick:addOption(T("UI_PZBridge_AllowControl"))
     self:addChild(self.tick)
 
-    self.stopBtn = ISButton:new(self.width - pad - 80, y, 80, fh + 6, "Стоп", self, PZBridgeWindow.onStop)
+    self.stopBtn = ISButton:new(self.width - pad - 80, y, 80, fh + 6, T("UI_PZBridge_Stop"), self, PZBridgeWindow.onStop)
     self.stopBtn:initialise()
     self.stopBtn:instantiate()
     self:addChild(self.stopBtn)
     y = y + fh + 12
 
-    self.lblTask = ISLabel:new(pad, y, fh, "Задача: нет", 1, 1, 1, 1, font, true)
+    self.lblTask = ISLabel:new(pad, y, fh, T("UI_PZBridge_Task", T("UI_PZBridge_TaskNone")), 1, 1, 1, 1, font, true)
     self.lblTask:initialise()
     self:addChild(self.lblTask)
     y = y + fh + 2
-    self.lblStep = ISLabel:new(pad, y, fh, "Шаг: -", 0.9, 0.9, 0.9, 1, font, true)
+    self.lblStep = ISLabel:new(pad, y, fh, T("UI_PZBridge_Step", "-"), 0.9, 0.9, 0.9, 1, font, true)
     self.lblStep:initialise()
     self:addChild(self.lblStep)
     y = y + fh + 2
-    self.lblThreat = ISLabel:new(pad, y, fh, "Угроза: -", 1, 0.8, 0.5, 1, font, true)
+    self.lblThreat = ISLabel:new(pad, y, fh, T("UI_PZBridge_Threat", "-"), 1, 0.8, 0.5, 1, font, true)
     self.lblThreat:initialise()
     self:addChild(self.lblThreat)
     y = y + fh + 8
@@ -83,7 +85,7 @@ function PZBridgeWindow:createChildren()
     self.entry.onCommandEntered = function(_) win:onSend() end
     self:addChild(self.entry)
 
-    self.sendBtn = ISButton:new(self.width - pad - 90, bottom, 90, entryH, "Отправить", self, PZBridgeWindow.onSend)
+    self.sendBtn = ISButton:new(self.width - pad - 90, bottom, 90, entryH, T("UI_PZBridge_Send"), self, PZBridgeWindow.onSend)
     self.sendBtn:initialise()
     self.sendBtn:instantiate()
     self:addChild(self.sendBtn)
@@ -119,7 +121,7 @@ end
 
 function PZBridgeWindow:addLogLine(who, text, gt)
     if not self.log then return end
-    local prefix = (gt and gt ~= "" and ("[" .. gt .. "] ") or "") .. (WHO[who] or who) .. ": "
+    local prefix = (gt and gt ~= "" and ("[" .. gt .. "] ") or "") .. (WHO[who] and T(WHO[who]) or tostring(who)) .. ": "
     local lines = wrap(prefix .. tostring(text), self.log.font, self.log.width - 24)
     for _, l in ipairs(lines) do
         self.log:addItem(l, { color = COLORS[who] or COLORS.mod })
@@ -140,8 +142,8 @@ end
 
 function PZBridgeWindow:onStop()
     PZBridge.stopAll("stop button")
-    PZBridge.event("stop", { by = "player" }, "Игрок нажал Стоп")
-    PZBridge.chatAdd("mod", "Остановлено игроком.")
+    PZBridge.event("stop", { by = "player" }, "player pressed Stop")
+    PZBridge.chatAdd("mod", T("UI_PZBridge_StoppedByPlayer"))
 end
 
 function PZBridgeWindow:onSend()
@@ -150,29 +152,29 @@ function PZBridgeWindow:onSend()
     self.entry:setText("")
     PZBridge.sendPlayerMessage(text)
     if not S.access then
-        PZBridge.chatAdd("mod", "Доступ выключен: агент прочитает сообщение, но действовать не сможет.")
+        PZBridge.chatAdd("mod", T("UI_PZBridge_AccessOffMsg"))
     end
 end
 
 function PZBridgeWindow:refreshStatus()
     if not self.lblTask then return end
     local job = S.job or S.pausedJob
-    local name = job and job.name or "нет"
-    if S.pausedJob and not S.job then name = name .. " (пауза)" end
-    self.lblTask:setName("Задача: " .. name .. (S.access and "" or "   [доступ выключен]"))
-    self.lblStep:setName("Шаг: " .. tostring(job and job.step or "-"))
+    local name = job and job.name or T("UI_PZBridge_TaskNone")
+    if S.pausedJob and not S.job then name = T("UI_PZBridge_TaskPaused", name) end
+    self.lblTask:setName(T("UI_PZBridge_Task", name) .. (S.access and "" or ("   " .. T("UI_PZBridge_AccessOffTag"))))
+    self.lblStep:setName(T("UI_PZBridge_Step", tostring(job and (job.stepUI or job.step) or "-")))
     local p = PZBridge.player()
     local threat = "-"
     if p and PZBridge.P then
         local ok, t = pcall(PZBridge.P.threat, p, PZBridge.guard)
         if ok and t then
-            threat = t.count .. " зомби в 15 кл." ..
-                (t.nearest_dist and (", ближайший " .. t.nearest_dist) or "") ..
-                (t.seeing > 0 and (", видят меня: " .. t.seeing) or "")
+            threat = T("UI_PZBridge_ThreatCount", t.count, PZBridge.guard.threat_radius or 15) ..
+                (t.nearest_dist and T("UI_PZBridge_ThreatNearest", t.nearest_dist) or "") ..
+                (t.seeing > 0 and T("UI_PZBridge_ThreatSeeing", t.seeing) or "")
         end
     end
     if S.alert then threat = threat .. "  ALERT" end
-    self.lblThreat:setName("Угроза: " .. threat)
+    self.lblThreat:setName(T("UI_PZBridge_Threat", threat))
     if self.tick:isSelected(1) ~= (S.access == true) then self.tick:setSelected(1, S.access == true) end
 end
 
@@ -220,7 +222,7 @@ end
 if PZAPI and PZAPI.ModOptions and PZAPI.ModOptions.create then
     local ok, opts = pcall(function() return PZAPI.ModOptions:create("PZBridge", "PZBridge") end)
     if ok and opts then
-        UI.keyOption = opts:addKeyBind("toggleWindow", "Окно доступа агента", Keyboard.KEY_F9)
+        UI.keyOption = opts:addKeyBind("toggleWindow", T("UI_PZBridge_KeyToggle"), Keyboard.KEY_F9)
     end
 end
 

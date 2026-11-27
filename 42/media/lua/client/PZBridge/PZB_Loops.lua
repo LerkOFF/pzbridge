@@ -10,8 +10,18 @@ require "TimedActions/WalkToTimedAction"
 local U = PZBridge.U
 local S = PZBridge.S
 local P = PZBridge.P
+local T = PZBridge.T
 PZBridge.L = PZBridge.L or {}
 local L = PZBridge.L
+
+-- Режим движения для окна: walk/sneak/run/sprint -> перевод.
+local MODE_KEYS = { walk = "UI_PZBridge_Mode_walk", sneak = "UI_PZBridge_Mode_sneak",
+                    run = "UI_PZBridge_Mode_run", sprint = "UI_PZBridge_Mode_sprint" }
+function L.modeName(m)
+    local k = MODE_KEYS[tostring(m)]
+    if k then return T(k) end
+    return tostring(m)
+end
 
 ---------------------------------------------------------------------------
 -- Ходьба с принудительным бегом. Бег и спринт у IsoPlayer каждый кадр
@@ -41,17 +51,26 @@ end
 -- Предохранитель (guard): проверка здоровья, крови, выносливости, толпы.
 ---------------------------------------------------------------------------
 
--- g - таблица порогов (вызов перекрывает глобальные). Возвращает причину или nil.
+-- g - таблица порогов (вызов перекрывает глобальные).
+-- Возвращает причину (англ., для агента) и её перевод для игрока, или nil.
 function L.guardReason(player, g, threat, weaponNeeded)
     local bd = player:getBodyDamage()
     local hp = U.try(bd, "getOverallBodyHealth") or 100
-    if g.hp_min and hp < g.hp_min then return "низкое здоровье " .. math.floor(hp) end
+    if g.hp_min and hp < g.hp_min then
+        return "low health " .. math.floor(hp), T("UI_PZBridge_GuardLowHp", math.floor(hp))
+    end
     local bleed = U.try(bd, "getNumPartsBleeding") or 0
-    if g.bleeding_max and bleed > g.bleeding_max then return "сильное кровотечение (" .. bleed .. ")" end
+    if g.bleeding_max and bleed > g.bleeding_max then
+        return "heavy bleeding (" .. bleed .. " parts)", T("UI_PZBridge_GuardBleeding", bleed)
+    end
     local endu = 1
     if CharacterStat then endu = U.try(player:getStats(), "get", CharacterStat.ENDURANCE) or 1 end
-    if g.endurance_min and endu < g.endurance_min then return "одышка, выносливость " .. U.round(endu, 2) end
-    if g.crowd_max and threat and threat.crowd > g.crowd_max then return "слишком много зомби рядом (" .. threat.crowd .. ")" end
+    if g.endurance_min and endu < g.endurance_min then
+        return "out of breath, endurance " .. U.round(endu, 2), T("UI_PZBridge_GuardBreath", U.round(endu, 2))
+    end
+    if g.crowd_max and threat and threat.crowd > g.crowd_max then
+        return "too many zombies nearby (" .. threat.crowd .. ")", T("UI_PZBridge_GuardCrowd", threat.crowd)
+    end
     return nil
 end
 
@@ -92,11 +111,11 @@ end
 
 function Mover:dest(player)
     local sq = P.square(self.tx, self.ty, self.tz)
-    if not sq then return nil, "клетка не загружена (слишком далеко)" end
+    if not sq then return nil, "square not loaded (too far)" end
     if self.adjacent or not U.try(sq, "isFree", false) then
         local adj = AdjacentFreeTileFinder.Find(sq, player)
         if adj then return adj end
-        if self.adjacent then return nil, "нет свободной клетки рядом с целью" end
+        if self.adjacent then return nil, "no free square next to the target" end
     end
     return sq
 end
@@ -185,7 +204,8 @@ function L.closedDoorNear(player, tx, ty)
     return best
 end
 
--- Шаг. Возвращает "moving" | "arrived" | "failed", сообщение.
+-- Шаг. Возвращает "moving" | "arrived" | "failed", сообщение (англ.)
+-- и, для шага "moving", текст для окна (перевод) или nil.
 function Mover:update(player, now, threat)
     if self.state == "init" then
         local ok, err = self:begin(player)
@@ -213,14 +233,14 @@ function Mover:update(player, now, threat)
                 self.doorsOpened = self.doorsOpened + 1
                 self.state = "door"
                 self.lastMoveMs = now
-                return "moving", "открываю дверь"
+                return "moving", "opening door", T("UI_PZBridge_StepOpenDoor")
             end
         end
         if self.state == "door" and busy then return "moving" end
         self.repaths = self.repaths + 1
         if self.repaths > self.maxRepaths then
             S.moveMode = nil
-            return "failed", "не могу дойти (нет пути или застрял)"
+            return "failed", "cannot reach (no path or stuck)"
         end
         local ok, err = self:begin(player)
         if not ok then return "failed", err end
@@ -245,28 +265,30 @@ function L.startMoveTo(ctx, p, x, y, z, args)
     local useGuard = args.guard ~= false
     local mover = L.newMover(x, y, z or p:getZ(), { mode = args.mode or "auto", adjacent = args.adjacent, arrive = args.arrive, open_doors = args.open_doors })
     local timeout = (args.timeout or 300) * 1000
-    local job = { name = ctx.tool or "move_to", step = "иду к " .. math.floor(x) .. "," .. math.floor(y) }
+    local job = { name = ctx.tool or "move_to", step = "going to " .. math.floor(x) .. "," .. math.floor(y),
+                  stepUI = T("UI_PZBridge_StepGoTo", math.floor(x), math.floor(y)) }
     job.update = function(job, player, now)
         local threat = P.threat(player, g)
         job.threat = threat
         if useGuard and threat.danger then
             mover:cancel(player)
-            local reason = threat.seeing > 0 and "зомби видит меня" or ("зомби в " .. tostring(threat.nearest_dist) .. " клетках")
+            local reason = threat.seeing > 0 and "a zombie sees me" or ("zombie at " .. tostring(threat.nearest_dist) .. " tiles")
             PZBridge.event("guard", { reason = reason, nearest = threat.nearest and P.strip({ threat.nearest })[1] or nil }, reason)
             if args.flee_on_threat then
                 L.startFlee({ id = job.cmdId, tool = "flee" }, player, { distance = g.flee_distance, mode = "run" })
                 return nil
             end
-            return "interrupted", "угроза: " .. reason, { threat = reason, x = U.round(player:getX(), 1), y = U.round(player:getY(), 1) }
+            return "interrupted", "threat: " .. reason, { threat = reason, x = U.round(player:getX(), 1), y = U.round(player:getY(), 1) }
         end
         if now - job.startedMs > timeout then
             mover:cancel(player)
-            return "failed", "таймаут движения"
+            return "failed", "move timeout"
         end
-        local st, msg = mover:update(player, now, threat)
-        job.step = (msg or ("иду к " .. mover.tx .. "," .. mover.ty)) .. " [" .. tostring(mover.current) .. "]"
+        local st, msg, msgUI = mover:update(player, now, threat)
+        job.step = (msg or ("going to " .. mover.tx .. "," .. mover.ty)) .. " [" .. tostring(mover.current) .. "]"
+        job.stepUI = (msgUI or T("UI_PZBridge_StepGoTo", mover.tx, mover.ty)) .. " [" .. L.modeName(mover.current) .. "]"
         if st == "arrived" then
-            return "done", "пришёл", { x = U.round(player:getX(), 1), y = U.round(player:getY(), 1), z = math.floor(player:getZ()) }
+            return "done", "arrived", { x = U.round(player:getX(), 1), y = U.round(player:getY(), 1), z = math.floor(player:getZ()) }
         elseif st == "failed" then
             return "failed", msg
         end
@@ -274,7 +296,7 @@ function L.startMoveTo(ctx, p, x, y, z, args)
     end
     job.stop = function(job, player) mover:cancel(player) end
     PZBridge.startJob(job, ctx)
-    return "running", "иду"
+    return "running", "moving"
 end
 
 ---------------------------------------------------------------------------
@@ -312,7 +334,7 @@ function L.startFlee(ctx, p, args)
         fx, fy = args.x, args.y
     else
         local zs = P.zombies(p, 30, false)
-        if not zs[1] then return "ok", "убегать не от кого" end
+        if not zs[1] then return "ok", "no zombies to flee from" end
         -- центр масс ближних зомби
         local sx, sy, n = 0, 0, 0
         for _, z in ipairs(zs) do
@@ -321,25 +343,26 @@ function L.startFlee(ctx, p, args)
         fx, fy = sx / n, sy / n
     end
     local sq = L.fleePoint(p, fx, fy, dist)
-    if not sq then return "error", "нет свободной клетки, чтобы отступить" end
+    if not sq then return "error", "no free square to retreat to" end
     local mover = L.newMover(sq:getX(), sq:getY(), sq:getZ(), { mode = mode, arrive = 1.5 })
-    local job = { name = "flee", step = "отступаю" }
+    local job = { name = "flee", step = "fleeing", stepUI = T("UI_PZBridge_StepFlee") }
     job.update = function(job, player, now)
         local st, msg = mover:update(player, now, nil)
         local dNow = U.dist(player:getX(), player:getY(), fx, fy)
-        job.step = "отступаю, до угрозы " .. U.round(dNow, 1)
+        job.step = "fleeing, distance to threat " .. U.round(dNow, 1)
+        job.stepUI = T("UI_PZBridge_StepFleeDist", U.round(dNow, 1))
         if st == "arrived" or dNow >= dist then
             mover:cancel(player)
-            return "done", "отступил", { x = U.round(player:getX(), 1), y = U.round(player:getY(), 1), dist_from_threat = U.round(dNow, 1) }
+            return "done", "retreated", { x = U.round(player:getX(), 1), y = U.round(player:getY(), 1), dist_from_threat = U.round(dNow, 1) }
         elseif st == "failed" then
             return "failed", msg
         end
-        if now - job.startedMs > 60000 then return "failed", "таймаут отступления" end
+        if now - job.startedMs > 60000 then return "failed", "flee timeout" end
         return nil
     end
     job.stop = function(job, player) mover:cancel(player) end
     PZBridge.startJob(job, ctx)
-    return "running", "отступаю"
+    return "running", "fleeing"
 end
 
 ---------------------------------------------------------------------------
@@ -403,7 +426,7 @@ function L.collectContainers(player, scope, target, radius, includeCorpses)
     elseif scope == "room" then
         local sq = player:getCurrentSquare()
         local room = sq and sq:getRoom()
-        if not room then return list, "игрок не в комнате" end
+        if not room then return list, "player is not in a room" end
         addRoom(room)
         return list, nil
     elseif scope == "building" then
@@ -412,7 +435,7 @@ function L.collectContainers(player, scope, target, radius, includeCorpses)
                 local b = sq:getBuilding()
                 if b and P.buildingKey(b) == tostring(target) then building = b; return "break" end
             end)
-            if not building then return list, "здание " .. tostring(target) .. " не найдено рядом" end
+            if not building then return list, "building " .. tostring(target) .. " not found nearby" end
         else
             building = player:getCurrentBuilding()
             if not building then
@@ -431,7 +454,7 @@ function L.collectContainers(player, scope, target, radius, includeCorpses)
                 end)
                 building = best
             end
-            if not building then return list, "рядом нет непосещённых зданий" end
+            if not building then return list, "no unvisited buildings nearby" end
         end
         local _, def = P.buildingKey(building)
         local rooms = def and U.try(def, "getRooms")
@@ -501,23 +524,23 @@ function L.startSearch(ctx, p, args)
     local bkey = building and P.buildingKey(building) or nil
     if #todo == 0 then
         if bkey then mem.visitedBuildings[bkey] = true end
-        return "ok", "нечего обыскивать (всё уже осмотрено)", { searched = 0, found = U.array({}), building = bkey }
+        return "ok", "nothing to search (everything already visited)", { searched = 0, found = U.array({}), building = bkey }
     end
     local maxC = args.max_containers or 60
-    local job = { name = "search", step = "обыск", result = { searched = 0, found = U.array({}), containers = U.array({}), building = bkey } }
+    local job = { name = "search", step = "searching", stepUI = T("UI_PZBridge_StepSearch"), result = { searched = 0, found = U.array({}), containers = U.array({}), building = bkey } }
     job.update = function(job, player, now)
         local threat = P.threat(player, g)
         if useGuard and threat.danger then
             if job.mover then job.mover:cancel(player) end
-            local reason = threat.seeing > 0 and "зомби видит меня" or ("зомби в " .. tostring(threat.nearest_dist) .. " клетках")
+            local reason = threat.seeing > 0 and "a zombie sees me" or ("zombie at " .. tostring(threat.nearest_dist) .. " tiles")
             PZBridge.event("guard", { reason = reason }, reason)
-            return "interrupted", "угроза: " .. reason
+            return "interrupted", "threat: " .. reason
         end
         if job.cur == nil then
             if #todo == 0 or job.result.searched >= maxC then
                 if bkey and #todo == 0 then mem.visitedBuildings[bkey] = true end
                 local n = #job.result.found
-                return "done", (n > 0) and ("найдено: " .. n) or "ничего подходящего", job.result
+                return "done", (n > 0) and ("found: " .. n) or "nothing matching", job.result
             end
             -- ближайший следующий
             local bi, bd
@@ -532,7 +555,9 @@ function L.startSearch(ctx, p, args)
         local e = job.cur
         if job.phase == "walk" then
             local st, msg = job.mover:update(player, now, threat)
-            job.step = "иду к " .. tostring(U.try(e.c, "getType")) .. " (" .. e.sq:getX() .. "," .. e.sq:getY() .. ")"
+            local ctype = tostring(U.try(e.c, "getType"))
+            job.step = "going to " .. ctype .. " (" .. e.sq:getX() .. "," .. e.sq:getY() .. ")"
+            job.stepUI = T("UI_PZBridge_StepSearchGo", ctype, e.sq:getX(), e.sq:getY())
             if st == "arrived" then
                 job.mover:cancel(player)
                 job.phase = "look"
@@ -565,7 +590,7 @@ function L.startSearch(ctx, p, args)
             if filter and #matched > 0 then
                 for _, inf in ipairs(matched) do
                     job.result.found[#job.result.found + 1] = inf
-                    PZBridge.event("found", { item = inf, container = e.cid }, "найдено: " .. tostring(inf.name))
+                    PZBridge.event("found", { item = inf, container = e.cid }, "found: " .. tostring(inf.name))
                 end
                 if args.take then
                     local it = U.try(e.c, "getItemWithID", matched[1].id)
@@ -583,7 +608,7 @@ function L.startSearch(ctx, p, args)
         end
         if job.phase == "finish" then
             if P.isBusy(player) then return nil end
-            return "done", "найдено: " .. tostring(job.result.found[1] and job.result.found[1].name), job.result
+            return "done", "found: " .. tostring(job.result.found[1] and job.result.found[1].name), job.result
         end
         return nil
     end
@@ -591,7 +616,7 @@ function L.startSearch(ctx, p, args)
         if job.mover then job.mover:cancel(player) end
     end
     PZBridge.startJob(job, ctx)
-    return "running", "обыскиваю " .. #todo .. " контейнеров"
+    return "running", "searching " .. #todo .. " containers"
 end
 
 ---------------------------------------------------------------------------
@@ -659,7 +684,7 @@ function L.startFight(ctx, p, args)
     local g = L.mergeGuard(args)
     local weaponMode = args.weapon or "best"
     local startKills = p:getZombieKills()
-    local job = { name = "fight", step = "бой", result = { kills = 0 } }
+    local job = { name = "fight", step = "fight", stepUI = T("UI_PZBridge_StepFight"), result = { kills = 0 } }
     job.lastAttackMs = 0
     job.lastReportKills = 0
     job.noTargetSince = nil
@@ -696,42 +721,50 @@ function L.startFight(ctx, p, args)
         job.result.kills = k
         if k > job.lastReportKills then
             job.lastReportKills = k
-            local msg
-            if untilKind == "kills" then msg = "убил " .. k .. "/" .. untilVal else msg = "убил " .. k end
+            local msg, msgUI
+            if untilKind == "kills" then
+                msg = "killed " .. k .. "/" .. untilVal
+                msgUI = T("UI_PZBridge_FightKillsGoal", k, untilVal)
+            else
+                msg = "killed " .. k
+                msgUI = T("UI_PZBridge_FightKills", k)
+            end
             PZBridge.event("fight_progress", { kills = k, goal = untilVal }, msg)
-            PZBridge.notify(msg, false)
+            PZBridge.notify(msgUI, false)
         end
         local threat = P.threat(player, g)
         -- предохранитель
         if useGuard and job.phase ~= "retreat" then
-            local reason = L.guardReason(player, g, threat)
+            local reason, reasonUI = L.guardReason(player, g, threat)
             local w = player:getPrimaryHandItem()
             if not reason and weaponMode ~= "none" and (w == nil or U.try(w, "isBroken")) then
                 local nw = L.bestWeapon(player, firearms)
-                if not nw then reason = "нет целого оружия" end
+                if not nw then reason, reasonUI = "no usable weapon", T("UI_PZBridge_GuardNoWeapon") end
             end
             if reason then
                 job.phase = "retreat"
                 job.reason = reason
-                PZBridge.notify("Отступаю: " .. reason .. ", убил " .. k, true)
-                PZBridge.event("guard", { reason = reason, kills = k }, "Отступаю: " .. reason)
+                job.reasonUI = reasonUI or reason
+                PZBridge.notify(T("UI_PZBridge_FightRetreat", job.reasonUI, k), true)
+                PZBridge.event("guard", { reason = reason, kills = k }, "retreating: " .. reason)
                 local fx, fy = player:getX() + 1, player:getY()
                 if threat.nearest then fx, fy = threat.nearest.x, threat.nearest.y end
                 local sq = L.fleePoint(player, fx, fy, g.flee_distance or 15)
                 if sq then
                     job.mover = L.newMover(sq:getX(), sq:getY(), sq:getZ(), { mode = "run", arrive = 1.5 })
                 else
-                    return "paused", "Отступаю: " .. reason .. " (некуда бежать)", job.result
+                    return "paused", "retreating: " .. reason .. " (nowhere to run)", job.result
                 end
             end
         end
         if job.phase == "retreat" then
             local st = job.mover:update(player, now, nil)
-            job.step = "отступаю: " .. tostring(job.reason)
+            job.step = "retreating: " .. tostring(job.reason)
+            job.stepUI = T("UI_PZBridge_StepRetreat", tostring(job.reasonUI))
             if st ~= "moving" then
                 job.mover:cancel(player)
                 job.phase = nil
-                return "paused", "Отступил: " .. tostring(job.reason) .. ", убил " .. k, job.result
+                return "paused", "retreated: " .. tostring(job.reason) .. ", killed " .. k, job.result
             end
             return nil
         end
@@ -747,7 +780,8 @@ function L.startFight(ctx, p, args)
             if want and want ~= w and (not w or P.weaponScore(w) < P.weaponScore(want) * 0.9 or U.try(w, "isBroken")) then
                 local two = (U.try(want, "isTwoHandWeapon") == true) or (U.try(want, "isRequiresEquippedBothHands") == true)
                 ISInventoryPaneContextMenu.equipWeapon(want, true, two, player:getPlayerNum())
-                job.step = "беру оружие: " .. tostring(want:getDisplayName())
+                job.step = "equipping weapon: " .. tostring(want:getDisplayName())
+                job.stepUI = T("UI_PZBridge_StepTakeWeapon", tostring(want:getDisplayName()))
                 return nil
             end
         end
@@ -761,28 +795,30 @@ function L.startFight(ctx, p, args)
             for _, z in ipairs(zs) do if z.dist <= radius then goalMet = false; break end end
         elseif untilKind == "target" then goalMet = (target == nil) end
         if goalMet and active == 0 then
-            local msg = "Готово: убил " .. k .. " зомби"
-            PZBridge.notify(msg, true)
-            return "done", msg, job.result
+            PZBridge.notify(T("UI_PZBridge_FightDone", k), true)
+            return "done", "done: killed " .. k .. " zombies", job.result
         end
         if goalMet and active > 0 and not job.reportedExtra then
             job.reportedExtra = true
-            local msg = "убил " .. k .. (untilVal and ("/" .. untilVal) or "") .. ", но ещё " .. active .. " идут ко мне, добиваю"
-            PZBridge.notify(msg, false)
-            PZBridge.event("fight_progress", { kills = k, active = active }, msg)
+            local kstr = k .. (untilVal and ("/" .. untilVal) or "")
+            PZBridge.notify(T("UI_PZBridge_FightExtra", kstr, active), false)
+            PZBridge.event("fight_progress", { kills = k, active = active },
+                "killed " .. kstr .. ", but " .. active .. " more are coming, finishing them")
         end
         if not target then
             job.noTargetSince = job.noTargetSince or now
-            job.step = "ищу зомби"
+            job.step = "looking for zombies"
+            job.stepUI = T("UI_PZBridge_StepSeek")
             if now - job.noTargetSince > 20000 then
-                return "failed", "зомби рядом нет, убил " .. k, job.result
+                return "failed", "no zombies nearby, killed " .. k, job.result
             end
             return nil
         end
         job.noTargetSince = nil
         local range = L.weaponRange(player)
         local z = target.obj
-        job.step = "цель " .. tostring(target.id) .. " в " .. tostring(target.dist) .. " кл., убил " .. k
+        job.step = "target " .. tostring(target.id) .. " at " .. tostring(target.dist) .. " tiles, killed " .. k
+        job.stepUI = T("UI_PZBridge_StepTarget", tostring(target.id), target.dist, k)
         if target.dist > range then
             -- зомби сам идёт ко мне: стоять и ждать, иначе подходить
             if target.targeting and target.dist < 3.5 then
@@ -812,7 +848,7 @@ function L.startFight(ctx, p, args)
         if job.mover then job.mover:cancel(player) end
     end
     PZBridge.startJob(job, ctx)
-    return "running", "бой: " .. tostring(args["until"] or "clear")
+    return "running", "fight: " .. tostring(args["until"] or "clear")
 end
 
 ---------------------------------------------------------------------------
@@ -821,7 +857,7 @@ end
 
 function L.startWait(ctx, p, args)
     args = args or {}
-    local job = { name = "wait", step = "жду" }
+    local job = { name = "wait", step = "waiting", stepUI = T("UI_PZBridge_StepWait") }
     local g = L.mergeGuard(args)
     if args.game_minutes then
         local gt = getGameTime()
@@ -832,22 +868,23 @@ function L.startWait(ctx, p, args)
     job.update = function(job, player, now)
         if args.interrupt_on_threat ~= false then
             local t = P.threat(player, g)
-            if t.danger then return "interrupted", "угроза рядом" end
+            if t.danger then return "interrupted", "threat nearby" end
         end
-        if job.endMs and now >= job.endMs then return "done", "подождал" end
-        if job.endHours and getGameTime():getWorldAgeHours() >= job.endHours then return "done", "подождал" end
+        if job.endMs and now >= job.endMs then return "done", "waited" end
+        if job.endHours and getGameTime():getWorldAgeHours() >= job.endHours then return "done", "waited" end
         return nil
     end
     PZBridge.startJob(job, ctx)
-    return "running", "жду"
+    return "running", "waiting"
 end
 
 ---------------------------------------------------------------------------
 -- Отслеживание ванильных действий, поставленных в очередь одной командой.
 ---------------------------------------------------------------------------
 
-function L.actionJob(ctx, name, check, step)
-    local job = { name = name, step = step or name }
+-- step - англ. текст для агента, stepUI - перевод для окна (необязательно).
+function L.actionJob(ctx, name, check, step, stepUI)
+    local job = { name = name, step = step or name, stepUI = stepUI }
     local pl = PZBridge.player()
     if pl and P.isBusy(pl) then job.seenBusy = true end
     job.update = function(job, player, now)
@@ -856,8 +893,10 @@ function L.actionJob(ctx, name, check, step)
             job.seenBusy = true
             job.idleSince = nil
             local _, _, cur = P.isBusy(player)
-            job.step = (step or name) .. (cur and (": " .. tostring(cur)) or "")
-            if now - job.startedMs > 15 * 60 * 1000 then return "failed", "слишком долго" end
+            local suffix = cur and (": " .. tostring(cur)) or ""
+            job.step = (step or name) .. suffix
+            job.stepUI = (stepUI or step or name) .. suffix
+            if now - job.startedMs > 15 * 60 * 1000 then return "failed", "took too long" end
             return nil
         end
         job.idleSince = job.idleSince or now
@@ -867,8 +906,8 @@ function L.actionJob(ctx, name, check, step)
             if ok and st then return st, msg, data end
             if not ok then return "error", tostring(st) end
         end
-        if not job.seenBusy then return "failed", "действие не началось (недоступно в игре)" end
-        return "done", "выполнено"
+        if not job.seenBusy then return "failed", "action did not start (not available in game)" end
+        return "done", "done"
     end
     PZBridge.startJob(job, ctx)
     return "running", step or name

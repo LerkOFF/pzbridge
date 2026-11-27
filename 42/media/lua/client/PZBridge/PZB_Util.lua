@@ -79,6 +79,55 @@ function U.each(list, fn)
 end
 
 ---------------------------------------------------------------------------
+-- Тексты для игрока.
+-- Kahlua портит не-ASCII символы в строковых литералах .lua (оставляет младший
+-- байт кода символа), поэтому в коде мода только ASCII. Тексты окна, заметки
+-- мода и реплики персонажа берутся из media/lua/shared/Translate/<язык>/UI.json.
+-- Сообщения для агента (results, events, state) пишутся по-английски прямо в коде.
+---------------------------------------------------------------------------
+
+-- PZBridge.T("UI_PZBridge_Key", a, b): перевод с подстановкой %1, %2...
+-- (getText в 42.22 превращает %1 в %1$s и вызывает String.formatted).
+-- Если ключа нет или переводы не загружены, возвращает ключ и аргументы.
+function PZBridge.T(key, ...)
+    local n = select("#", ...)
+    local args = {}
+    for i = 1, n do
+        local v = select(i, ...)
+        if v == nil then v = "" end
+        if type(v) ~= "number" then v = tostring(v) end
+        args[i] = v
+    end
+    if getTextOrNull then
+        local ok, s = pcall(getTextOrNull, key, unpack(args, 1, n))
+        if ok and s ~= nil then return s end
+    end
+    if n == 0 then return key end
+    local parts = { key }
+    for i = 1, n do parts[#parts + 1] = tostring(args[i]) end
+    return table.concat(parts, " ")
+end
+
+-- Символ по коду UTF-16. В Kahlua string.char делает (char) код, поэтому
+-- работает для всего BMP; суррогатные пары из 😀 собираются сами,
+-- так как строки Kahlua - это Java-строки.
+local function charFromCode(code)
+    if code < 128 then return string.char(code) end
+    local ok, c = pcall(string.char, code)
+    if ok then return c end
+    return "?"
+end
+U.charFromCode = charFromCode
+
+-- Раскрыть \uXXXX в строке (pzb.py экранирует так весь не-ASCII текст команды).
+function U.unescapeU(s)
+    if type(s) ~= "string" or not string.find(s, "\\u%x%x%x%x") then return s end
+    return (string.gsub(s, "\\u(%x%x%x%x)", function(h)
+        return charFromCode(tonumber(h, 16) or 63)
+    end))
+end
+
+---------------------------------------------------------------------------
 -- JSON
 ---------------------------------------------------------------------------
 
@@ -196,14 +245,7 @@ function U.jsonEncode(v)
 end
 
 -- Разбор JSON. Возвращает значение или nil, текст ошибки.
-local function utf8char(code)
-    if code < 128 then return string.char(code) end
-    -- В Kahlua строки - это Java-строки, символ с кодом > 255 допустим.
-    local ok, c = pcall(string.char, code)
-    if ok then return c end
-    return "?"
-end
-
+-- \uXXXX собирается через charFromCode (см. выше).
 function U.jsonDecode(str)
     if type(str) ~= "string" then return nil, "not a string" end
     local pos = 1
@@ -240,7 +282,7 @@ function U.jsonDecode(str)
                 elseif n == "u" then
                     local h = str:sub(pos + 2, pos + 5)
                     local code = tonumber(h, 16) or 63
-                    out[#out + 1] = utf8char(code)
+                    out[#out + 1] = charFromCode(code)
                     pos = pos + 4
                 else
                     out[#out + 1] = n
