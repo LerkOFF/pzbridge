@@ -96,6 +96,19 @@ function V.info(v, p)
         info.fuel_l = U.round(U.try(gas, "getContainerContentAmount") or 0, 1)
         info.fuel_cap = U.try(gas, "getContainerCapacity")
     end
+    -- все контейнеры машины (сиденья, бардачок, кузов): лут бывает и на сиденьях
+    local conts = U.array({})
+    local n = U.try(v, "getPartCount") or 0
+    for i = 0, n - 1 do
+        local part = v:getPartByIndex(i)
+        local c = part and U.try(part, "getItemContainer")
+        if c and not string.find(tostring(U.try(part, "getId") or ""), "GasTank", 1, true) then
+            local cnt = c:getItems():size()
+            conts[#conts + 1] = { id = "vehicle," .. tostring(v:getSqlId()) .. "," .. tostring(part:getId()),
+                part = tostring(part:getId()), items = cnt }
+        end
+    end
+    info.containers = conts
     return info
 end
 
