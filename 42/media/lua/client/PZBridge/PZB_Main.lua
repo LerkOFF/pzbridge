@@ -176,7 +176,16 @@ function PZBridge.buildState(p, full)
     local items = P.inventoryItems(p)
     for i, it in ipairs(items) do
         if i > (full and 200 or 80) then break end
-        inv[#inv + 1] = P.itemInfo(it, full)
+        local info = P.itemInfo(it, full)
+        -- в какой сумке лежит (id сумки), если не в основном инвентаре
+        local c = it:getContainer()
+        local holder = c and U.try(c, "getContainingItem")
+        if holder and c ~= p:getInventory() then info.in_bag = holder:getID() end
+        if instanceof(it, "InventoryContainer") then info.bag = true end
+        -- висит в слоте хотбара (спина, пояс)
+        local sl = U.try(it, "getAttachedSlot")
+        if sl ~= nil and sl ~= -1 then info.attached = U.try(it, "getAttachedSlotType") or sl end
+        inv[#inv + 1] = info
     end
     st.inventory = inv
     st.inventory_count = #items

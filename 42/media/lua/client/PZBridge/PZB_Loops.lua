@@ -576,6 +576,10 @@ function L.startSearch(ctx, p, args)
             job.result.searched = job.result.searched + 1
             local matched = U.array({})
             local summary = { id = e.cid, type = U.try(e.c, "getType"), count = e.c:getItems():size() }
+            -- комната контейнера (kitchen, bedroom...), если объект в комнате
+            local osq = e.sq or (e.o and U.try(e.o, "getSquare"))
+            local oroom = osq and U.try(osq, "getRoom")
+            if oroom then summary.room = U.try(oroom, "getName") end
             for _, it in ipairs(P.containerItems(e.c)) do
                 if filter == nil or P.matches(it, filter) then
                     local inf = P.itemInfo(it, true)

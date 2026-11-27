@@ -501,9 +501,23 @@ end })
 Tool("transfer", { params = { "what", "to" }, fn = function(a, ctx, p)
     local it, err = invItem(p, a)
     if not it then return "error", err end
-    local dest = P.resolveContainer(a.to)
-    if not dest then return "error", "destination container not found" end
-    if not luautils.walkToContainer(dest, pnum(p)) then return "error", "cannot reach the container" end
+    -- куда: "inventory" (основной инвентарь), id сумки в инвентаре или cid контейнера в мире
+    local dest
+    local inv = p:getInventory()
+    local toId = num(a.to)
+    if a.to == "inventory" or a.to == "main" then
+        dest = inv
+    elseif toId then
+        local bag = inv:getItemWithID(toId)
+        if not bag or not instanceof(bag, "InventoryContainer") then return "error", "bag " .. tostring(a.to) .. " not found in inventory" end
+        dest = bag:getInventory()
+    else
+        dest = P.resolveContainer(a.to)
+        if not dest then return "error", "destination container not found" end
+        if not luautils.walkToContainer(dest, pnum(p)) then return "error", "cannot reach the container" end
+    end
+    if it:getContainer() == dest then return "ok", "already there" end
+    if U.try(dest, "hasRoomFor", p, it) == false then return "error", "no room in destination" end
     ISTimedActionQueue.add(ISInventoryTransferUtil.newInventoryTransferAction(p, it, it:getContainer(), dest))
     local nm = tostring(it:getDisplayName())
     return L.actionJob(ctx, "transfer", nil, "transferring " .. nm, T("UI_PZBridge_StepTransfer", nm))
@@ -513,6 +527,29 @@ Tool("equip", { params = { "what", "slot" }, fn = function(a, ctx, p)
     local it, err = invItem(p, a)
     if not it then return "error", err end
     local slot = a.slot or "primary"
+    local nm0 = tostring(it:getDisplayName())
+    -- слоты хотбара (спина, пояс): как ванильный ISHotbar при перетаскивании
+    if slot == "back" or slot == "belt" or slot == "attach" then
+        local hb = getPlayerHotbar and getPlayerHotbar(pnum(p))
+        if not hb or not hb.availableSlot then return "error", "hotbar not available" end
+        local atype = U.try(it, "getAttachmentType")
+        if not atype then return "error", "item cannot be attached" end
+        local want = (slot == "back" and "Back") or nil
+        for idx, s in pairs(hb.availableSlot) do
+            local okName = (want == nil) or s.name == want or s.slotType == want
+            if slot == "belt" then okName = s.slotType ~= "Back" and s.name ~= "Back" end
+            if okName and s.def and s.def.attachments and s.def.attachments[atype] then
+                if hb.attachedItems and hb.attachedItems[idx] == it then return "ok", "already attached: " .. nm0 end
+                hb:attachItem(it, s.def.attachments[atype], idx, s.def, true)
+                return L.actionJob(ctx, "equip", function(job, pl)
+                    local sl = U.try(it, "getAttachedSlot")
+                    if sl ~= nil and sl ~= -1 then return "done", "attached (" .. tostring(s.name) .. "): " .. nm0 end
+                    return "failed", "could not attach"
+                end, "attaching " .. nm0, T("UI_PZBridge_StepEquip", nm0))
+            end
+        end
+        return "error", "no hotbar slot for attachment type " .. tostring(atype)
+    end
     local two = slot == "both" or (U.try(it, "isTwoHandWeapon") == true) or (U.try(it, "isRequiresEquippedBothHands") == true)
     ISInventoryPaneContextMenu.equipWeapon(it, slot ~= "secondary", two, pnum(p))
     local nm = tostring(it:getDisplayName())
