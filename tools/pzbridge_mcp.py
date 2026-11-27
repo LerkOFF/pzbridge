@@ -15,6 +15,16 @@ import traceback
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import pzb  # noqa: E402
 
+RULES_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "PLAYBOOK.md")
+
+
+def read_rules():
+    try:
+        with open(RULES_PATH, encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return "rules file not found: docs/PLAYBOOK.md"
+
 SERVER_NAME = "pzbridge"
 SERVER_VERSION = "0.1.0"
 DEFAULT_PROTOCOL = "2025-06-18"
@@ -26,6 +36,10 @@ DEFAULT_PROTOCOL = "2025-06-18"
 PLAYBOOK = """You control a Project Zomboid (build 42) single-player character through the PZBridge mod.
 The game runs in real time; you think slowly, so long behaviours (walking, searching, fighting,
 fleeing) run inside the mod as loops, and you orchestrate them with small tool calls.
+
+BEFORE PLAYING read the survival rules once: get_rules (or resource pzbridge://rules) and get_sandbox.
+Key rules: never fight 3+ zombies (leave), first_aid right after every fight, loot corpses after a fight,
+pause the game while you think and unpause only to act.
 
 ALWAYS START with get_player_messages. If access=false, call reply_to_player asking the player to
 press F9 in game and tick "Allow control" ("Разрешить управление"); until then every game action is denied.
@@ -182,6 +196,7 @@ GAME_TOOLS = [
     ("equip", "action", "Equip an item in hands, or attach it to a hotbar slot: back (e.g. saucepan, pan, big weapon on the back) or belt.", obj(merge(ITEM, {"slot": {"type": "string", "enum": ["primary", "secondary", "both", "back", "belt"]}}, WAIT))),
     ("unequip", "action", "Unequip an item (or the primary hand item).", obj(merge(ITEM, {"slot": {"type": "string", "enum": ["primary", "secondary"]}}, WAIT))),
     ("wear", "action", "Wear clothing.", obj(merge(ITEM, WAIT))),
+    ("get_sandbox", "control", "Sandbox settings of this world: zombie speed, transmission, when water and power shut off, alarms, loot rarity, days survived.", obj({})),
     ("first_aid", "action", "Treat all wounds: bleeding first, then the worst. Each wound is disinfected if there is something to do it with (alcohol wipes, disinfectant, strong alcohol), otherwise skipped, and bandaged with a clean bandage or clean rags. With not enough bandages it first rips a sheet, curtains or an unworn piece of clothing into rags. Dirty rags are never used.", obj(WAIT)),
     ("recipes", "control", "List crafting recipes available for an inventory item (B42 crafting, same as right-click on the item).", obj(ITEM)),
     ("craft", "action", "Run a crafting recipe on an inventory item, e.g. recipe=RipSheets on a sheet (10 rags) or RipClothing on unworn clothing. Use recipes to see names.", obj(merge(ITEM, {"recipe": {"type": "string"}}, WAIT), ["recipe"])),
@@ -221,6 +236,8 @@ GAME_TOOLS = [
 ]
 
 LOCAL_TOOLS = [
+    ("get_rules", "Survival rules for playing Project Zomboid B42 through this mod (docs/PLAYBOOK.md, in Russian): fighting (max 2 zombies, stomp the head), first aid right after a fight, looting corpses, noise and stealth, water and power shutoff, sleeping, base, hordes. Read once at the start of a session and follow it.",
+     obj({})),
     ("get_player_messages", "New messages the player typed in the in-game F9 window, with ids. Marks them read. Call this first in every turn. Also returns access (false = ask the player to enable control).",
      obj({"include_read": {"type": "boolean"}, "mark_read": {"type": "boolean", "description": "default true"}})),
     ("reply_to_player", "Send a message to the player: shown in the F9 window log and spoken by the character. Works even when access=false.",
@@ -297,6 +314,8 @@ def run_local_tool(name, args):
         r = dict(pzb.wait_result(cid, timeout=10))
         r["cmd_id"] = cid
         return r
+    if name == "get_rules":
+        return {"rules": read_rules()}
     if name == "get_state":
         st = pzb.read_json(pzb.F_STATE)
         if args.get("full"):
@@ -351,6 +370,8 @@ PROMPTS = [{"name": "play", "description": "How to play Project Zomboid through 
 RESOURCES = [
     {"uri": "pzbridge://playbook", "name": "PZBridge playbook", "mimeType": "text/markdown",
      "description": "How to play through PZBridge: loop, safety, recipes."},
+    {"uri": "pzbridge://rules", "name": "Survival rules", "mimeType": "text/markdown",
+     "description": "Rules for playing PZ B42 well through PZBridge (docs/PLAYBOOK.md)."},
     {"uri": "pzbridge://state", "name": "Current state", "mimeType": "application/json",
      "description": "Full state file written by the mod."},
 ]
@@ -396,6 +417,8 @@ def handle(msg):
         uri = params.get("uri")
         if uri == "pzbridge://playbook":
             return {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": PLAYBOOK}]}
+        if uri == "pzbridge://rules":
+            return {"contents": [{"uri": uri, "mimeType": "text/markdown", "text": read_rules()}]}
         if uri == "pzbridge://state":
             st = pzb.read_json(pzb.F_STATE, {})
             return {"contents": [{"uri": uri, "mimeType": "application/json", "text": json.dumps(st, ensure_ascii=False)}]}

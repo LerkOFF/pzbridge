@@ -636,6 +636,24 @@ local function recipeName(r)
     return tostring(U.try(r, "getName") or "?")
 end
 
+-- Настройки песочницы, от которых зависит стратегия (что известно игроку из настроек мира).
+Tool("get_sandbox", { kind = "control", params = {}, fn = function(a, ctx, p)
+    local sv = SandboxVars or {}
+    local zc = sv.ZombieConfig or {}
+    local keys = { "Zombies", "Distribution", "DayLength", "StartMonth", "WaterShut", "WaterShutModifier",
+        "ElecShut", "ElecShutModifier", "Alarm", "LockedHouses", "FoodLoot", "WeaponLoot", "MedicalLoot",
+        "MultiHitZombies", "MuscleStrainFactor", "Helicopter", "NightDarkness" }
+    local out = {}
+    for _, k in ipairs(keys) do if sv[k] ~= nil then out[k] = sv[k] end end
+    local zkeys = { "Speed", "Strength", "Toughness", "Transmission", "Mortality", "Reanimate", "Cognition",
+        "Memory", "Sight", "Hearing", "FollowSoundDistance", "RallyGroupSize" }
+    out.ZombieConfig = {}
+    for _, k in ipairs(zkeys) do if zc[k] ~= nil then out.ZombieConfig[k] = zc[k] end end
+    out.days_survived = U.round((getGameTime() and getGameTime():getWorldAgeHours() or 0) / 24, 2)
+    ctx.data = out
+    return "ok", "sandbox settings", out
+end })
+
 Tool("recipes", { kind = "control", params = { "what" }, fn = function(a, ctx, p)
     local it, err = invItem(p, a)
     if not it then return "error", err end
