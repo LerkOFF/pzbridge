@@ -215,6 +215,29 @@ function L.markLocked(o)
     end
 end
 
+-- Закрытая запертая дверь вплотную в сторону цели (ванильный поиск пути ведёт
+-- через двери, не зная о замке, и персонаж бесконечно дёргает ручку).
+function L.lockedDoorAhead(player, tx, ty)
+    local px, py = player:getX(), player:getY()
+    local meT = U.dist(px, py, tx + 0.5, ty + 0.5)
+    local found
+    P.eachSquare(px, py, player:getZ(), 1, function(sq)
+        local objs = sq:getObjects()
+        for i = 0, objs:size() - 1 do
+            local o = objs:get(i)
+            if P.isDoor(o) and not U.try(o, "IsOpen") then
+                local locked = U.try(o, "isLocked") == true or U.try(o, "isLockedByKey") == true or L.isKnownLocked(o)
+                local cx, cy = sq:getX() + 0.5, sq:getY() + 0.5
+                if locked and U.dist(cx, cy, px, py) <= 1.6 and U.dist(cx, cy, tx + 0.5, ty + 0.5) <= meT + 0.5 then
+                    found = o
+                    return "break"
+                end
+            end
+        end
+    end)
+    return found
+end
+
 -- Открытая дверь или целое открытое окно рядом с игроком (то, через что он только что вошёл).
 function L.openingBehind(player)
     local best, bestD
@@ -337,6 +360,17 @@ function Mover:update(player, now, threat)
         return "arrived"
     end
     local busy = P.isBusy(player)
+    -- упёрлись в запертую дверь (2 с без движения): не дёргать её, путь закрыт
+    if (now - self.lastMoveMs) > 2000 then
+        local ld = L.lockedDoorAhead(player, self.tx, self.ty)
+        if ld then
+            L.markLocked(ld)
+            self:cancel(player)
+            S.moveMode = nil
+            local lsq = ld:getSquare()
+            return "failed", "path blocked by a locked door at " .. lsq:getX() .. "," .. lsq:getY()
+        end
+    end
     local stuck = (now - self.lastMoveMs) > 6000
     if (not busy) or stuck then
         if self.openDoors and self.doorsOpened < 6 then
@@ -872,10 +906,13 @@ function L.startFight(ctx, p, args)
             for _, z in ipairs(zs) do if z.id == untilVal then return z, zs end end
             return nil, zs
         end
-        -- приоритет: кто идёт ко мне, затем ближайший
+        -- приоритет: кто идёт ко мне, затем ближайший; недостижимых (за запертой дверью) пропускаем минуту
         local best
+        local nowMs = U.nowMs()
         for _, z in ipairs(zs) do
-            if math.abs(z.z - player:getZ()) < 1 then
+            local un = job.unreachable and job.unreachable[z.id]
+            if un and nowMs - un > 60000 then job.unreachable[z.id] = nil; un = nil end
+            if math.abs(z.z - player:getZ()) < 1 and (not un or z.dist <= 2) then
                 if z.targeting and z.dist <= radius then return z, zs end
                 if not best then best = z end
             end
@@ -985,7 +1022,7 @@ function L.startFight(ctx, p, args)
             job.step = "looking for zombies"
             job.stepUI = T("UI_PZBridge_StepSeek")
             if now - job.noTargetSince > 20000 then
-                return "failed", "no zombies nearby, killed " .. k, job.result
+                return "failed", "no reachable zombies nearby (some may be behind locked doors), killed " .. k, job.result
             end
             return nil
         end
@@ -1080,8 +1117,14 @@ function L.startFight(ctx, p, args)
                 job.moverDowned = downed
                 job.moverAt = { target.x, target.y }
             end
-            local st = job.mover:update(player, now, nil)
-            if st == "failed" then job.mover = nil end
+            local st, why = job.mover:update(player, now, nil)
+            if st == "failed" then
+                -- до этого зомби не дойти: не строить тот же путь снова
+                job.mover = nil
+                job.unreachable = job.unreachable or {}
+                job.unreachable[target.id] = now
+                PZBridge.event("target_unreachable", { zombie = target.id, reason = tostring(why) }, "cannot reach zombie " .. tostring(target.id) .. ": " .. tostring(why))
+            end
             return nil
         end
         -- в радиусе удара
