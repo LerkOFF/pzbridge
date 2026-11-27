@@ -814,8 +814,15 @@ Tool("climb_window", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
         cleaned = true
     end
     ISTimedActionQueue.add(ISClimbThroughWindow:new(p, o, 0))
+    -- залез в здание с улицы, а рядом зомби: закрыть окно за собой (если оно целое)
+    local fromOutside = p:getCurrentSquare() and p:getCurrentSquare():getBuilding() == nil
+    local willClose = a.close_behind ~= false and fromOutside and not U.try(o, "isSmashed")
+        and #P.zombies(p, num(a.close_radius) or 25, false) > 0
+    if willClose then L.queueClose(p, o) end
     return L.actionJob(ctx, "climb_window", function(job, pl)
-        return "done", cleaned and "removed glass from the frame and climbed through" or "climbed through"
+        local msg = cleaned and "removed glass from the frame and climbed through" or "climbed through"
+        if willClose then msg = msg .. ", closed the window behind (zombies nearby)" end
+        return "done", msg
     end, "climbing through window", T("UI_PZBridge_StepClimb"))
 end })
 

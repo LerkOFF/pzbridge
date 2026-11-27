@@ -102,6 +102,9 @@ function L.newMover(tx, ty, tz, opts)
     m.arrive = opts.arrive or 1.0
     m.openDoors = opts.open_doors ~= false
     m.allowGlass = opts.allow_glass == true
+    -- вошёл в здание, а рядом зомби: закрыть за собой дверь или окно
+    m.closeBehind = opts.close_behind ~= false
+    m.closeRadius = opts.close_radius or 25
     m.repaths = 0
     m.maxRepaths = opts.max_repaths or 5
     m.state = "init"
@@ -212,6 +215,33 @@ function L.markLocked(o)
     end
 end
 
+-- Открытая дверь или целое открытое окно рядом с игроком (то, через что он только что вошёл).
+function L.openingBehind(player)
+    local best, bestD
+    local px, py = player:getX(), player:getY()
+    P.eachSquare(px, py, player:getZ(), 1, function(sq)
+        local objs = sq:getObjects()
+        for i = 0, objs:size() - 1 do
+            local o = objs:get(i)
+            local ok = (P.isDoor(o) or (P.isWindow(o) and not U.try(o, "isSmashed"))) and U.try(o, "IsOpen") == true
+            if ok then
+                local d = U.dist(sq:getX() + 0.5, sq:getY() + 0.5, px, py)
+                if d <= 1.8 and (not bestD or d < bestD) then best, bestD = o, d end
+            end
+        end
+    end)
+    return best
+end
+
+-- Закрыть дверь или окно (ванильным действием).
+function L.queueClose(player, o)
+    if P.isDoor(o) then
+        ISTimedActionQueue.add(ISOpenCloseDoor:new(player, o))
+    else
+        ISTimedActionQueue.add(ISOpenCloseWindow:new(player, o))
+    end
+end
+
 -- Босиком и впереди (ближе к цели, в пределах клетки) лежит битое стекло?
 function L.glassAhead(player, tx, ty)
     if not P.barefoot(player) then return false end
@@ -260,10 +290,6 @@ function Mover:update(player, now, threat)
         if not ok then return "failed", err end
     end
     self:applyMode(player, threat)
-    if self:arrived(player) then
-        S.moveMode = nil
-        return "arrived"
-    end
     -- прогресс
     local lp = self.lastPos
     if lp and U.dist(lp[1], lp[2], player:getX(), player:getY()) > 0.3 then
@@ -275,6 +301,40 @@ function Mover:update(player, now, threat)
         self:cancel(player)
         S.moveMode = nil
         return "failed", "broken glass ahead and no shoes: put shoes on or clear the glass (pickup_glass)"
+    end
+    -- закрываем за собой: ждём конца действия и продолжаем путь
+    if self.closing then
+        if P.isBusy(player) then return "moving", "closing behind", T("UI_PZBridge_StepCloseBehind") end
+        self.closing = false
+        if self:arrived(player) then S.moveMode = nil; return "arrived" end
+        local ok, err = self:begin(player)
+        if not ok then return "failed", err end
+        return "moving"
+    end
+    if self.closeBehind then
+        local csq = player:getCurrentSquare()
+        if csq then
+            local inside = csq:getBuilding() ~= nil
+            if self.wasOutside and inside then
+                local opening = L.openingBehind(player)
+                if opening and #P.zombies(player, self.closeRadius, false) > 0 then
+                    ISTimedActionQueue.clear(player)
+                    L.queueClose(player, opening)
+                    self.closing = true
+                    self.lastMoveMs = now
+                    local osq = opening:getSquare()
+                    PZBridge.event("closed_behind", { x = osq:getX(), y = osq:getY(), z = osq:getZ(), kind = P.isDoor(opening) and "door" or "window" },
+                        "entered a building with zombies nearby: closing it behind")
+                    self.wasOutside = false
+                    return "moving", "closing behind", T("UI_PZBridge_StepCloseBehind")
+                end
+            end
+            self.wasOutside = not inside
+        end
+    end
+    if self:arrived(player) then
+        S.moveMode = nil
+        return "arrived"
     end
     local busy = P.isBusy(player)
     local stuck = (now - self.lastMoveMs) > 6000
@@ -327,7 +387,8 @@ function L.startMoveTo(ctx, p, x, y, z, args)
     args = args or {}
     local g = L.mergeGuard(args)
     local useGuard = args.guard ~= false
-    local mover = L.newMover(x, y, z or p:getZ(), { mode = args.mode or "auto", adjacent = args.adjacent, arrive = args.arrive, open_doors = args.open_doors, allow_glass = args.allow_glass })
+    local mover = L.newMover(x, y, z or p:getZ(), { mode = args.mode or "auto", adjacent = args.adjacent, arrive = args.arrive, open_doors = args.open_doors, allow_glass = args.allow_glass,
+        close_behind = args.close_behind, close_radius = args.close_radius })
     local timeout = (args.timeout or 300) * 1000
     local job = { name = ctx.tool or "move_to", step = "going to " .. math.floor(x) .. "," .. math.floor(y),
                   stepUI = T("UI_PZBridge_StepGoTo", math.floor(x), math.floor(y)) }
@@ -1014,7 +1075,7 @@ function L.startFight(ctx, p, args)
                 or (job.moverDowned ~= downed)
             if need then
                 if job.mover then job.mover:cancel(player) end
-                job.mover = L.newMover(target.x, target.y, target.z, { mode = (target.dist > 8) and "sneak" or "walk", adjacent = not downed, max_repaths = 2, open_doors = true })
+                job.mover = L.newMover(target.x, target.y, target.z, { mode = (target.dist > 8) and "sneak" or "walk", adjacent = not downed, max_repaths = 2, open_doors = true, close_behind = false })
                 job.moverFor = target.id
                 job.moverDowned = downed
                 job.moverAt = { target.x, target.y }
