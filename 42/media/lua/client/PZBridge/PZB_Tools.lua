@@ -636,6 +636,69 @@ local function recipeName(r)
     return tostring(U.try(r, "getName") or "?")
 end
 
+-- Карта: все здания мира в радиусе (по метаданным карты, как у игрока на бумажной карте).
+-- Тип по комнатам: жилое (спальни, кухни), магазин, склад и т.п.
+local function compass(dx, dy)
+    -- в PZ x растёт на восток, y на юг
+    local a = math.atan2(-dy, dx) * 180 / math.pi
+    if a < 0 then a = a + 360 end
+    local names = { "E", "NE", "N", "NW", "W", "SW", "S", "SE" }
+    return names[math.floor((a + 22.5) / 45) % 8 + 1]
+end
+
+local SHOP_ROOMS = { grocery = true, gigamart = true, conveniencestore = true, pharmacy = true, toolstore = true,
+    hardwarestore = true, gasstore = true, liquorstore = true, clothesstore = true, sportstore = true,
+    gunstore = true, bookstore = true, policestorage = true, hospitalroom = true, medclinic = true }
+
+Tool("map", { kind = "control", params = { "radius", "type", "limit" }, fn = function(a, ctx, p)
+    local radius = num(a.radius) or 150
+    local limit = num(a.limit) or 25
+    local want = a.type or "any"
+    local mg = getWorld():getMetaGrid()
+    local list = U.try(mg, "getBuildings")
+    if not list then return "error", "map data not available" end
+    local mem = PZBridge.mem()
+    local px, py = p:getX(), p:getY()
+    local out = {}
+    for i = 0, list:size() - 1 do
+        local def = list:get(i)
+        local x1, y1, x2, y2 = def:getX(), def:getY(), def:getX2(), def:getY2()
+        local cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+        local d = U.dist(cx, cy, px, py)
+        if d <= radius then
+            local rooms = U.try(def, "getRooms")
+            local names, kinds = {}, { residential = false, shop = false }
+            if rooms then
+                for r = 0, rooms:size() - 1 do
+                    local n = tostring(U.try(rooms:get(r), "getName") or "")
+                    names[n] = (names[n] or 0) + 1
+                    if n == "bedroom" or n == "kitchen" or n == "livingroom" then kinds.residential = true end
+                    if SHOP_ROOMS[n] then kinds.shop = true end
+                end
+            end
+            local t = kinds.shop and "shop" or (kinds.residential and "house" or "other")
+            if want == "any" or want == t then
+                local key = U.try(def, "getIDString") or tostring(U.try(def, "getID"))
+                local rl = {}
+                for n, c in pairs(names) do rl[#rl + 1] = (c > 1) and (n .. "x" .. c) or n end
+                table.sort(rl)
+                out[#out + 1] = {
+                    id = key, type = t, dist = U.round(d, 0), dir = compass(cx - px, cy - py),
+                    x = math.floor(cx), y = math.floor(cy), size = (x2 - x1) .. "x" .. (y2 - y1),
+                    rooms = table.concat(rl, ","), visited = mem.visitedBuildings[key] == true,
+                    blocked = mem.blockedBuildings and mem.blockedBuildings[key] ~= nil or false,
+                    explored = U.try(def, "isAllExplored") == true,
+                }
+            end
+        end
+    end
+    table.sort(out, function(x, y) return x.dist < y.dist end)
+    local res = U.array({})
+    for i = 1, math.min(limit, #out) do res[#res + 1] = out[i] end
+    ctx.data = { buildings = res, total = #out, radius = radius }
+    return "ok", #out .. " buildings within " .. radius, ctx.data
+end })
+
 -- Настройки песочницы, от которых зависит стратегия (что известно игроку из настроек мира).
 Tool("get_sandbox", { kind = "control", params = {}, fn = function(a, ctx, p)
     local sv = SandboxVars or {}
