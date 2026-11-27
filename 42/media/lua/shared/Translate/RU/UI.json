@@ -73,5 +73,6 @@
     "UI_PZBridge_StepBarricade": "заколачиваю",
     "UI_PZBridge_StepUnbarricade": "отрываю доски",
     "UI_PZBridge_StepSleep": "ложусь спать",
-    "UI_PZBridge_StepRest": "отдыхаю"
+    "UI_PZBridge_StepRest": "отдыхаю",
+    "UI_PZBridge_StepGlass": "собираю битое стекло"
 }

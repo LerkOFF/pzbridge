@@ -73,5 +73,6 @@
     "UI_PZBridge_StepBarricade": "barricading",
     "UI_PZBridge_StepUnbarricade": "removing planks",
     "UI_PZBridge_StepSleep": "going to sleep",
-    "UI_PZBridge_StepRest": "resting"
+    "UI_PZBridge_StepRest": "resting",
+    "UI_PZBridge_StepGlass": "picking up broken glass"
 }

@@ -739,6 +739,11 @@ local function openClose(wantOpen)
         if not o then return "error", k end
         if (U.try(o, "IsOpen") == true) == wantOpen then return "ok", wantOpen and "already open" or "already closed" end
         if wantOpen and U.try(o, "isBarricaded") then return "error", "barricaded" end
+        -- одна попытка: если раньше не открылось, второй раз не пробуем
+        if wantOpen and L.isKnownLocked(o) then
+            if k == "door" then return "error", "door is locked (did not open earlier): find a key, another way, or break it" end
+            return "error", "window is stuck (did not open earlier): only smash_window is left, it is loud - last resort"
+        end
         if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
         if k == "door" then
             ISTimedActionQueue.add(ISOpenCloseDoor:new(p, o))
@@ -750,8 +755,13 @@ local function openClose(wantOpen)
         end
         return L.actionJob(ctx, wantOpen and "open" or "close", function(job, pl)
             if (U.try(o, "IsOpen") == true) == wantOpen then return "done", wantOpen and "opened" or "closed" end
-            local locked = U.try(o, "isLocked") or U.try(o, "isLockedByKey") or U.try(o, "isPermaLocked")
-            return "failed", locked and "locked" or "did not work"
+            if wantOpen then
+                -- не открылось с первого раза: дверь заперта, окно заело (заперто); запоминаем
+                L.markLocked(o)
+                if k == "door" then return "failed", "door did not open: locked" end
+                return "failed", "window did not open: stuck or locked, can only be smashed (loud)"
+            end
+            return "failed", "did not work"
         end, (wantOpen and "opening " or "closing ") .. tostring(k),
             T(wantOpen and "UI_PZBridge_StepOpen" or "UI_PZBridge_StepClose", kindName(k)))
     end
@@ -783,17 +793,59 @@ Tool("climb_window", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     if U.try(o, "isBarricaded") then return "error", "window is barricaded" end
     if not (U.try(o, "IsOpen") or U.try(o, "isSmashed")) then return "error", "window is closed: open or smash_window first" end
     if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
+    -- осколки в раме режут при пролезании: сначала убрать их (как в ванильном меню)
+    local cleaned = false
+    if U.try(o, "isSmashed") and not U.try(o, "isGlassRemoved") then
+        ISTimedActionQueue.add(ISRemoveBrokenGlass:new(p, o))
+        cleaned = true
+    end
     ISTimedActionQueue.add(ISClimbThroughWindow:new(p, o, 0))
-    return L.actionJob(ctx, "climb_window", nil, "climbing through window", T("UI_PZBridge_StepClimb"))
+    return L.actionJob(ctx, "climb_window", function(job, pl)
+        return "done", cleaned and "removed glass from the frame and climbed through" or "climbed through"
+    end, "climbing through window", T("UI_PZBridge_StepClimb"))
 end })
 
+-- Разбить окно: громко (игра поднимает шум на 70 клеток) и оставляет осколки на полу,
+-- по которым босиком можно получить глубокую рану. Только в крайнем случае:
+-- нужен явный noisy_ok=true, и рядом не должно быть зомби.
 Tool("smash_window", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local o, k, sq = doorOrWindow(a, p, "window")
     if not o then return "error", k end
     if U.try(o, "isSmashed") then return "ok", "already smashed" end
+    if U.try(o, "IsOpen") then return "error", "window is open: no need to smash it, use climb_window" end
+    if a.noisy_ok ~= true then
+        return "error", "smashing is loud (heard about 70 tiles away) and leaves broken glass: last resort only; call again with noisy_ok=true"
+    end
+    local safeR = num(a.safe_radius) or 20
+    local zs = P.zombies(p, safeR, false)
+    if #zs > 0 then
+        return "error", #zs .. " zombies within " .. safeR .. " tiles: smashing now is dangerous, deal with them or move away first"
+    end
     if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
     ISTimedActionQueue.add(ISSmashWindow:new(p, o))
     return L.actionJob(ctx, "smash_window", nil, "smashing window", T("UI_PZBridge_StepSmash"))
+end })
+
+-- Убрать битое стекло с пола (клетка x,y,z или ближайшая в радиусе 3).
+Tool("pickup_glass", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
+    local glass
+    if num(a.x) and num(a.y) then
+        local _, g = P.hasGlass(P.square(num(a.x), num(a.y), num(a.z) or math.floor(p:getZ())))
+        glass = g
+    else
+        local bestD
+        P.eachSquare(p:getX(), p:getY(), p:getZ(), 3, function(sq)
+            local has, g = P.hasGlass(sq)
+            if has then
+                local d = U.dist(sq:getX() + 0.5, sq:getY() + 0.5, p:getX(), p:getY())
+                if not bestD or d < bestD then glass, bestD = g, d end
+            end
+        end)
+    end
+    if not glass then return "error", "no broken glass found" end
+    if not luautils.walkAdj(p, glass:getSquare()) then return "error", "cannot get close" end
+    ISTimedActionQueue.add(ISPickupBrokenGlass:new(p, glass))
+    return L.actionJob(ctx, "pickup_glass", nil, "picking up broken glass", T("UI_PZBridge_StepGlass"))
 end })
 
 Tool("barricade", { params = { "x", "y", "z" }, fn = function(a, ctx, p)

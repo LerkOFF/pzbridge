@@ -406,6 +406,7 @@ end
 
 function P.doorInfo(o, sq)
     return {
+        known_locked = P.knownStuck(o, sq),
         kind = "door",
         x = sq:getX(), y = sq:getY(), z = sq:getZ(),
         open = U.try(o, "IsOpen") == true,
@@ -416,8 +417,39 @@ function P.doorInfo(o, sq)
     }
 end
 
+-- Босиком ли персонаж (нет надетой обуви). Битое стекло на полу режет босые ноги.
+function P.barefoot(player)
+    local worn = U.try(player, "getWornItems")
+    if not worn then return false end
+    for i = 0, worn:size() - 1 do
+        local wi = worn:get(i)
+        local loc = tostring(U.try(wi, "getLocation") or "")
+        if string.find(string.lower(loc), "shoe", 1, true) then return false end
+    end
+    return true
+end
+
+-- Битое стекло на клетке (осколки от разбитого окна).
+function P.hasGlass(sq)
+    if not sq then return false end
+    local objs = sq:getObjects()
+    for i = 0, objs:size() - 1 do
+        if instanceof(objs:get(i), "IsoBrokenGlass") then return true, objs:get(i) end
+    end
+    return false
+end
+
+-- Память мода: дверь или окно уже не открылись с первой попытки.
+function P.knownStuck(o, sq)
+    local mem = PZBridge.mem()
+    if not mem.lockedDoors or not sq then return false end
+    local k = sq:getX() .. "," .. sq:getY() .. "," .. sq:getZ() .. (U.try(o, "getNorth") and "N" or "W")
+    return mem.lockedDoors[k] ~= nil
+end
+
 function P.windowInfo(o, sq)
     return {
+        stuck = P.knownStuck(o, sq),
         kind = "window",
         x = sq:getX(), y = sq:getY(), z = sq:getZ(),
         open = U.try(o, "IsOpen") == true,
@@ -517,7 +549,7 @@ function P.scanArea(player, opts)
     local r = U.clamp(math.floor(opts.radius or 8), 1, 30)
     local res = {
         doors = U.array({}), windows = U.array({}), containers = U.array({}),
-        water = U.array({}), floor_items = U.array({}), beds = U.array({}),
+        water = U.array({}), floor_items = U.array({}), beds = U.array({}), glass = U.array({}),
         buildings = U.array({}), vehicles = U.array({}), rooms = U.array({}),
     }
     local seenB, seenV, seenR = {}, {}, {}
@@ -535,6 +567,8 @@ function P.scanArea(player, opts)
             elseif want("windows") and P.isWindow(o) then
                 local inf = P.windowInfo(o, sq); inf.dist = d
                 res.windows[#res.windows + 1] = inf
+            elseif want("glass") and instanceof(o, "IsoBrokenGlass") then
+                res.glass[#res.glass + 1] = { x = sq:getX(), y = sq:getY(), z = sq:getZ(), dist = d }
             end
             local cc = U.try(o, "getContainerCount") or 0
             if want("containers") and cc > 0 and not instanceof(o, "IsoDeadBody") then
@@ -800,6 +834,7 @@ function P.body(player)
         bitten_parts = U.try(bd, "getNumPartsBitten") or 0,
         scratched_parts = U.try(bd, "getNumPartsScratched") or 0,
         infected = U.try(bd, "IsInfected") == true,
+        barefoot = P.barefoot(player),
         wounds = U.array({}),
     }
     local parts = U.try(bd, "getBodyParts")

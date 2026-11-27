@@ -101,6 +101,7 @@ function L.newMover(tx, ty, tz, opts)
     m.adjacent = opts.adjacent == true
     m.arrive = opts.arrive or 1.0
     m.openDoors = opts.open_doors ~= false
+    m.allowGlass = opts.allow_glass == true
     m.repaths = 0
     m.maxRepaths = opts.max_repaths or 5
     m.state = "init"
@@ -202,8 +203,29 @@ function L.markLocked(o)
     if not mem.lockedDoors[k] then
         mem.lockedDoors[k] = PZBridge.gameTimeStr()
         local sq = o:getSquare()
-        PZBridge.event("door_locked", { x = sq:getX(), y = sq:getY(), z = sq:getZ() }, "door did not open after one try: treated as locked")
+        if P.isWindow(o) then
+            PZBridge.event("window_stuck", { x = sq:getX(), y = sq:getY(), z = sq:getZ() },
+                "window did not open after one try: stuck or locked, it can only be smashed (loud)")
+        else
+            PZBridge.event("door_locked", { x = sq:getX(), y = sq:getY(), z = sq:getZ() }, "door did not open after one try: treated as locked")
+        end
     end
+end
+
+-- Босиком и впереди (ближе к цели, в пределах клетки) лежит битое стекло?
+function L.glassAhead(player, tx, ty)
+    if not P.barefoot(player) then return false end
+    local px, py = player:getX(), player:getY()
+    local meT = U.dist(px, py, tx + 0.5, ty + 0.5)
+    local found = false
+    P.eachSquare(px, py, player:getZ(), 1, function(sq)
+        local cx, cy = sq:getX() + 0.5, sq:getY() + 0.5
+        if U.dist(cx, cy, px, py) <= 1.5 and U.dist(cx, cy, tx + 0.5, ty + 0.5) < meT and P.hasGlass(sq) then
+            found = true
+            return "break"
+        end
+    end)
+    return found
 end
 
 function L.closedDoorNear(player, tx, ty)
@@ -247,6 +269,12 @@ function Mover:update(player, now, threat)
     if lp and U.dist(lp[1], lp[2], player:getX(), player:getY()) > 0.3 then
         self.lastPos = { player:getX(), player:getY() }
         self.lastMoveMs = now
+    end
+    -- босиком по битому стеклу не идём: глубокая рана на ноге
+    if not self.allowGlass and L.glassAhead(player, self.tx, self.ty) then
+        self:cancel(player)
+        S.moveMode = nil
+        return "failed", "broken glass ahead and no shoes: put shoes on or clear the glass (pickup_glass)"
     end
     local busy = P.isBusy(player)
     local stuck = (now - self.lastMoveMs) > 6000
@@ -299,7 +327,7 @@ function L.startMoveTo(ctx, p, x, y, z, args)
     args = args or {}
     local g = L.mergeGuard(args)
     local useGuard = args.guard ~= false
-    local mover = L.newMover(x, y, z or p:getZ(), { mode = args.mode or "auto", adjacent = args.adjacent, arrive = args.arrive, open_doors = args.open_doors })
+    local mover = L.newMover(x, y, z or p:getZ(), { mode = args.mode or "auto", adjacent = args.adjacent, arrive = args.arrive, open_doors = args.open_doors, allow_glass = args.allow_glass })
     local timeout = (args.timeout or 300) * 1000
     local job = { name = ctx.tool or "move_to", step = "going to " .. math.floor(x) .. "," .. math.floor(y),
                   stepUI = T("UI_PZBridge_StepGoTo", math.floor(x), math.floor(y)) }
