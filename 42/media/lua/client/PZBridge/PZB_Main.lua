@@ -371,6 +371,7 @@ local function onTickGame()
     local p = PZBridge.player()
     if not p then return end
     local now = U.nowMs()
+    if S.access then pcall(L.lockedDoorWatch, p, now) end
     if now - lastJob >= PZBridge.config.jobIntervalMs then
         lastJob = now
         if S.job and not S.access then PZBridge.stopAll("access off") end

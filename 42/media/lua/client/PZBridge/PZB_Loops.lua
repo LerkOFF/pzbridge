@@ -102,6 +102,8 @@ function L.newMover(tx, ty, tz, opts)
     m.arrive = opts.arrive or 1.0
     m.openDoors = opts.open_doors ~= false
     m.allowGlass = opts.allow_glass == true
+    -- дверь заперта или окно ближе: входить через окно
+    m.windows = opts.use_windows ~= false
     -- вошёл в здание, а рядом зомби: закрыть за собой дверь или окно
     m.closeBehind = opts.close_behind ~= false
     m.closeRadius = opts.close_radius or 25
@@ -149,9 +151,47 @@ function Mover:arrived(player)
     return d0 <= self.arrive
 end
 
+-- Цель в здании, а персонаж снаружи: попробовать войти через ближайшее окно этого здания.
+function Mover:tryWindow(player)
+    if not self.windows then return false end
+    local tsq = getCell():getGridSquare(self.tx, self.ty, self.tz)
+    local B = tsq and tsq:getBuilding()
+    local psq = player:getCurrentSquare()
+    if not B or (psq and psq:getBuilding() == B) then return false end
+    self.targetB = B
+    local list = L.entryWindows(player, B, 25, self.triedWindows)
+    for _, e in ipairs(list) do
+        ISTimedActionQueue.clear(player)
+        if L.queueWindowEntry(player, e.o) then
+            self.window = e.o
+            self.windowTries = 0
+            self.state = "window"
+            self.lastMoveMs = U.nowMs()
+            return true
+        end
+        self.triedWindows = self.triedWindows or {}
+        self.triedWindows[e.o] = true
+    end
+    return false
+end
+
 function Mover:begin(player)
     local sq, err = self:dest(player)
     if not sq then return false, err end
+    -- войти в здание: если окно заметно ближе любой незапертой двери (или дверей нет), лезть через окно
+    if self.windows and self.state == "init" then
+        local B = sq:getBuilding()
+        local psq = player:getCurrentSquare()
+        if B and psq and psq:getBuilding() ~= B then
+            local door, dd = L.nearestOpenableDoor(player, B, 25)
+            local wl = L.entryWindows(player, B, 25, nil)
+            local w = wl[1]
+            if w and (not door or w.d + 3 < dd) then
+                self.destSq = sq
+                if self:tryWindow(player) then return true end
+            end
+        end
+    end
     self.destSq = sq
     ISTimedActionQueue.clear(player)
     local a = PZBWalkAction:new(player, sq)
@@ -237,6 +277,108 @@ function L.lockedDoorAhead(player, tx, ty)
         end
     end)
     return found
+end
+
+-- Здание, к которому относится окно (окно стоит на стене: здание по одну из сторон).
+local function windowBuilding(w)
+    local sq = w:getSquare()
+    if not sq then return nil end
+    local b = sq:getBuilding()
+    if b then return b end
+    local cell = getCell()
+    local other = U.try(w, "getNorth") and cell:getGridSquare(sq:getX(), sq:getY() - 1, sq:getZ())
+        or cell:getGridSquare(sq:getX() - 1, sq:getY(), sq:getZ())
+    return other and other:getBuilding() or nil
+end
+
+-- Окна здания B, через которые можно попробовать залезть: не забаррикадированы,
+-- не заклинили насовсем, не помечены заевшими; ближние к игроку первыми.
+function L.entryWindows(player, B, radius, skip)
+    local list = {}
+    P.eachSquare(player:getX(), player:getY(), player:getZ(), radius or 20, function(sq)
+        local objs = sq:getObjects()
+        for i = 0, objs:size() - 1 do
+            local o = objs:get(i)
+            if P.isWindow(o) and windowBuilding(o) == B and not U.try(o, "isBarricaded")
+                and U.try(o, "isPermaLocked") ~= true and not L.isKnownLocked(o)
+                and not (skip and skip[o]) then
+                list[#list + 1] = { o = o, d = U.dist(sq:getX() + 0.5, sq:getY() + 0.5, player:getX(), player:getY()) }
+            end
+        end
+    end)
+    table.sort(list, function(x, y) return x.d < y.d end)
+    return list
+end
+
+-- Ближайшая незапертая (по знаниям) дверь здания B.
+local function nearestOpenableDoor(player, B, radius)
+    local best, bestD
+    P.eachSquare(player:getX(), player:getY(), player:getZ(), radius or 20, function(sq)
+        local objs = sq:getObjects()
+        for i = 0, objs:size() - 1 do
+            local o = objs:get(i)
+            if P.isDoor(o) and not U.try(o, "isBarricaded") and U.try(o, "isLocked") ~= true
+                and U.try(o, "isLockedByKey") ~= true and not L.isKnownLocked(o) then
+                local ob = windowBuilding(o)
+                if ob == B then
+                    local d = U.dist(sq:getX() + 0.5, sq:getY() + 0.5, player:getX(), player:getY())
+                    if not bestD or d < bestD then best, bestD = o, d end
+                end
+            end
+        end
+    end)
+    return best, bestD
+end
+L.nearestOpenableDoor = nearestOpenableDoor
+
+-- Поставить в очередь: подойти к окну, открыть (если закрыто и цело), убрать стекло
+-- (если разбито), пролезть.
+function L.queueWindowEntry(player, w)
+    if not luautils.walkAdjWindowOrDoor(player, w:getSquare(), w) then return false end
+    if U.try(w, "isSmashed") then
+        if not U.try(w, "isGlassRemoved") then ISTimedActionQueue.add(ISRemoveBrokenGlass:new(player, w)) end
+    elseif not U.try(w, "IsOpen") then
+        ISTimedActionQueue.add(ISOpenCloseWindow:new(player, w))
+    end
+    ISTimedActionQueue.add(ISClimbThroughWindow:new(player, w, 0))
+    return true
+end
+
+-- Сторож для любой ходьбы (поиск, take, ванильный путь): персонаж стоит у
+-- закрытой запертой двери и не двигается полсекунды - значит, дёргает её.
+-- Дверь запоминается, путь обрывается (одна попытка на дверь).
+local watch = { x = 0, y = 0, since = 0 }
+function L.lockedDoorWatch(player, now)
+    local busy, _, cur = P.isBusy(player)
+    local px, py = player:getX(), player:getY()
+    if U.dist(px, py, watch.x, watch.y) > 0.05 or not busy then
+        watch.x, watch.y, watch.since = px, py, now
+        return
+    end
+    if now - watch.since < 600 then return end
+    local isWalk = cur and (string.find(tostring(cur), "Walk", 1, true) or string.find(tostring(cur), "PathFind", 1, true))
+    if not isWalk then return end
+    local found
+    P.eachSquare(px, py, player:getZ(), 1, function(sq)
+        local objs = sq:getObjects()
+        for i = 0, objs:size() - 1 do
+            local o = objs:get(i)
+            if P.isDoor(o) and not U.try(o, "IsOpen") and (U.try(o, "isLocked") == true or U.try(o, "isLockedByKey") == true)
+                and U.dist(sq:getX() + 0.5, sq:getY() + 0.5, px, py) <= 1.3 then
+                found = o
+                return "break"
+            end
+        end
+    end)
+    if found then
+        L.markLocked(found)
+        ISTimedActionQueue.clear(player)
+        S.lockedBlockMs = now
+        watch.since = now
+        local fsq = found:getSquare()
+        PZBridge.event("blocked_by_locked_door", { x = fsq:getX(), y = fsq:getY(), z = fsq:getZ() },
+            "walk stopped at a locked door (one try)")
+    end
 end
 
 -- Открытая дверь или целое открытое окно рядом с игроком (то, через что он только что вошёл).
@@ -359,6 +501,34 @@ function Mover:update(player, now, threat)
         S.moveMode = nil
         return "failed", "broken glass ahead and no shoes: put shoes on or clear the glass (pickup_glass)"
     end
+    -- лезем через окно: ждём конца действий, потом продолжаем путь
+    if self.state == "window" then
+        if P.isBusy(player) then return "moving", "entering through a window", T("UI_PZBridge_StepClimb") end
+        local w = self.window
+        local inB = self.targetB and player:getCurrentSquare() and player:getCurrentSquare():getBuilding() == self.targetB
+        if inB then
+            self.state = "moving"
+            self.window = nil
+            local ok, err = self:begin(player)
+            if not ok then return "failed", err end
+            return "moving"
+        end
+        -- не открылось: пробуем ещё (окна заедают), пока не заклинит насовсем
+        if w and not U.try(w, "IsOpen") and not U.try(w, "isSmashed") and U.try(w, "isPermaLocked") ~= true
+            and (self.windowTries or 0) < 8 then
+            self.windowTries = (self.windowTries or 0) + 1
+            L.queueWindowEntry(player, w)
+            return "moving", "window stuck, trying again", T("UI_PZBridge_StepClimb")
+        end
+        if w and U.try(w, "isPermaLocked") == true then L.markLocked(w) end
+        self.triedWindows = self.triedWindows or {}
+        if w then self.triedWindows[w] = true end
+        if not self:tryWindow(player) then
+            S.moveMode = nil
+            return "failed", "cannot get into the building: doors locked, windows jammed or barricaded"
+        end
+        return "moving", "trying another window", T("UI_PZBridge_StepClimb")
+    end
     -- закрываем за собой: ждём конца действия и продолжаем путь
     if self.closing then
         if P.isBusy(player) then return "moving", "closing behind", T("UI_PZBridge_StepCloseBehind") end
@@ -400,6 +570,9 @@ function Mover:update(player, now, threat)
         if ld then
             L.markLocked(ld)
             self:cancel(player)
+            if self:tryWindow(player) then
+                return "moving", "door locked, going through a window", T("UI_PZBridge_StepClimb")
+            end
             S.moveMode = nil
             local lsq = ld:getSquare()
             return "failed", "path blocked by a locked door at " .. lsq:getX() .. "," .. lsq:getY()
