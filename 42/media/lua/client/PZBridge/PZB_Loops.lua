@@ -835,7 +835,7 @@ end
 -- Bip01_Head (IsoZombie:getHeadSquare). Берём направление от центра тела к этой
 -- клетке и ставим точку на ~0.65 клетки от центра тела. Если клетка головы
 -- совпадает с клеткой тела или недоступна, остаётся центр тела.
-function L.headPoint(z, player)
+function L.headPoint(z, player, offset)
     local zx, zy, zz = z:getX(), z:getY(), z:getZ()
     -- направление от центра тела к голове: лицом вниз голова впереди, на спине - сзади
     local dirx, diry
@@ -856,7 +856,7 @@ function L.headPoint(z, player)
     if dirx then
         local n = math.sqrt(dirx * dirx + diry * diry)
         if n > 0.01 then
-            local off = L.headOffset or 0.85
+            local off = offset or L.headOffset or 0.85
             return zx + dirx / n * off, zy + diry / n * off, zz, true
         end
     end
@@ -1081,10 +1081,12 @@ function L.startFight(ctx, p, args)
             -- встать точно на тело: путь по точным координатам (не по центру клетки),
             -- цель пересчитывается, если тело при падении сместилось
             local zo = downedNear.obj
-            local zx, zy, zzz = L.headPoint(zo, player)
+            -- встать на грудь (между центром тела и головой) лицом к голове:
+            -- так зомби прижат, а удар ногой приходится в голову
+            local zx, zy, zzz = L.headPoint(zo, player, args.stand_offset or 0.35)
             local hd = U.dist(player:getX(), player:getY(), zx, zy)
             job.step = job.step .. ", to head " .. tostring(U.round(hd, 2)) .. ", tries " .. tostring(tries)
-            local onTopDist = args.on_top_dist or 0.45
+            local onTopDist = args.on_top_dist or 0.35
             if hd > onTopDist and tries < 6 then
                 if job.mover then job.mover:cancel(player); job.mover = nil end
                 local moved = job.stepTo ~= nil and U.dist(job.stepTo[1], job.stepTo[2], zx, zy) > 0.35
@@ -1103,7 +1105,7 @@ function L.startFight(ctx, p, args)
                 job.stepTo = nil
             end
             -- бить, только стоя у головы (или если подойти так и не вышло)
-            if (hd <= 0.8 or tries >= 6) and downedNear.dist <= range + 0.3 and now - job.lastAttackMs > interval then
+            if (hd <= 0.6 or tries >= 6) and downedNear.dist <= range + 0.3 and now - job.lastAttackMs > interval then
                 local ok
                 ok = L.finishDowned(player, downedNear.obj, finish)
                 if ok then job.lastAttackMs = now end
