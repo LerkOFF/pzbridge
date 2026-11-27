@@ -1116,13 +1116,74 @@ local function findBed(p, a)
     return o
 end
 
+-- Подготовка ко сну в текущем здании: выключить свет, задёрнуть шторы,
+-- положить подушку на кровать (игра даёт сон лучше, если подушка лежит на кровати
+-- или в руке). Возвращает сводку того, что поставлено в очередь.
+local function prepareSleep(p, bed)
+    local sq0 = p:getCurrentSquare()
+    local myB = sq0 and sq0:getBuilding()
+    local out = { lights = 0, curtains = 0, pillow = false }
+    if myB then
+        P.eachSquare(p:getX(), p:getY(), p:getZ(), 14, function(sq)
+            if sq:getBuilding() ~= myB then return end
+            local objs = sq:getObjects()
+            for i = 0, objs:size() - 1 do
+                local o = objs:get(i)
+                if instanceof(o, "IsoLightSwitch") and U.try(o, "isActivated") == true then
+                    ISWorldObjectContextMenu.onToggleLight(nil, o, pnum(p))
+                    out.lights = out.lights + 1
+                end
+                local c
+                if P.isWindow(o) then c = U.try(o, "HasCurtains") elseif instanceof(o, "IsoCurtain") then c = o end
+                if c and U.try(c, "IsOpen") == true then
+                    ISWorldObjectContextMenu.onOpenCloseCurtain(nil, c, pnum(p))
+                    out.curtains = out.curtains + 1
+                end
+            end
+        end)
+    end
+    if bed and bed:getSquare() then
+        local pillow
+        for _, it in ipairs(P.inventoryItems(p)) do
+            if U.try(it, "hasTag", ItemTag.PILLOW) == true then pillow = it; break end
+        end
+        if pillow and luautils.walkAdj(p, bed:getSquare(), true) then
+            ISInventoryPaneContextMenu.transferIfNeeded(p, pillow)
+            ISTimedActionQueue.add(ISDropWorldItemAction:new(p, pillow, bed:getSquare(), 0.5, 0.5, 0.4, 0, false))
+            out.pillow = true
+        end
+    end
+    return out
+end
+
+Tool("prepare_sleep", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
+    local bed = findBed(p, a)
+    local r = prepareSleep(p, bed)
+    ctx.data = r
+    return L.actionJob(ctx, "prepare_sleep", function(job, pl)
+        return "done", "lights off " .. r.lights .. ", curtains closed " .. r.curtains .. (r.pillow and ", pillow on the bed" or ", no pillow"), r
+    end, "preparing to sleep", T("UI_PZBridge_StepSleep"))
+end })
+
 Tool("sleep", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     local bed = findBed(p, a)
     if a.floor then bed = nil end
-    ISWorldObjectContextMenu.onConfirmSleep(nil, { internal = "YES" }, pnum(p), bed)
+    local prep = { lights = 0, curtains = 0, pillow = false }
+    if a.prepare ~= false then prep = prepareSleep(p, bed) end
+    local phase = "prepare"
+    local function startSleep(pl)
+        ISWorldObjectContextMenu.onConfirmSleep(nil, { internal = "YES" }, pnum(pl), bed)
+    end
+    if not P.isBusy(p) then phase = "sleep"; startSleep(p) end
     return L.actionJob(ctx, "sleep", function(job, pl)
-        if pl:isAsleep() then return "done", "sleeping" .. (bed and " in bed" or " on the floor") end
-        return "failed", "could not fall asleep (zombies nearby, pain, panic or not tired)"
+        if phase == "prepare" then
+            phase = "sleep"
+            startSleep(pl)
+            return "continue"
+        end
+        local note = " (lights off " .. prep.lights .. ", curtains closed " .. prep.curtains .. (prep.pillow and ", pillow on the bed)" or ")")
+        if pl:isAsleep() then return "done", "sleeping" .. (bed and " in bed" or " on the floor") .. note, prep end
+        return "failed", "could not fall asleep (zombies nearby, pain, panic or not tired)" .. note, prep
     end, "going to sleep", T("UI_PZBridge_StepSleep"))
 end })
 
