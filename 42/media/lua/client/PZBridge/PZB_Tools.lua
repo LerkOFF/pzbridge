@@ -739,10 +739,12 @@ local function openClose(wantOpen)
         if not o then return "error", k end
         if (U.try(o, "IsOpen") == true) == wantOpen then return "ok", wantOpen and "already open" or "already closed" end
         if wantOpen and U.try(o, "isBarricaded") then return "error", "barricaded" end
-        -- одна попытка: если раньше не открылось, второй раз не пробуем
-        if wantOpen and L.isKnownLocked(o) then
-            if k == "door" then return "error", "door is locked (did not open earlier): find a key, another way, or break it" end
-            return "error", "window is stuck (did not open earlier): only smash_window is left, it is loud - last resort"
+        -- дверь: одна попытка, не открылась - заперта. Окно можно дёргать, пока его не заклинит насовсем.
+        if wantOpen and k == "door" and L.isKnownLocked(o) then
+            return "error", "door is locked (did not open earlier): find a key, another way, or break it"
+        end
+        if wantOpen and k ~= "door" and (U.try(o, "isPermaLocked") == true or L.isKnownLocked(o)) then
+            return "error", "window is jammed for good: only smash_window is left, it is loud - last resort"
         end
         if not luautils.walkAdjWindowOrDoor(p, sq, o) then return "error", "cannot get close" end
         if k == "door" then
@@ -756,10 +758,22 @@ local function openClose(wantOpen)
         return L.actionJob(ctx, wantOpen and "open" or "close", function(job, pl)
             if (U.try(o, "IsOpen") == true) == wantOpen then return "done", wantOpen and "opened" or "closed" end
             if wantOpen then
-                -- не открылось с первого раза: дверь заперта, окно заело (заперто); запоминаем
-                L.markLocked(o)
-                if k == "door" then return "failed", "door did not open: locked" end
-                return "failed", "window did not open: stuck or locked, can only be smashed (loud)"
+                if k == "door" then
+                    -- дверь не открылась с первого раза: заперта, запоминаем
+                    L.markLocked(o)
+                    return "failed", "door did not open: locked"
+                end
+                -- окно: пробуем снова, пока не откроется или пока его не заклинит насовсем
+                if U.try(o, "isPermaLocked") == true then
+                    L.markLocked(o)
+                    return "failed", "window jammed for good after " .. (job.tries or 1) .. " tries: can only be smashed (loud)"
+                end
+                job.tries = (job.tries or 1) + 1
+                if job.tries <= (num(a.tries) or 10) then
+                    ISTimedActionQueue.add(ISOpenCloseWindow:new(pl, o))
+                    return "continue"
+                end
+                return "failed", "window did not open after " .. (job.tries - 1) .. " tries (not jammed yet): try again later or another way"
             end
             return "failed", "did not work"
         end, (wantOpen and "opening " or "closing ") .. tostring(k),

@@ -191,7 +191,7 @@ GAME_TOOLS = [
     ("fill", "action", "Fill a water container from a world source.",
      obj(merge(ITEM, XYZ, {"allow_dirty": {"type": "boolean"}}, WAIT))),
     # --- world objects
-    ("open", "action", "Open a door or window at x,y,z (walks next to it). One try only: a door that does not open is locked, a window that does not open is stuck or locked and can then only be smashed. Known ones are refused without trying (doors: known_locked, windows: stuck in scan_area).", obj(merge(XYZ, {"kind": {"type": "string", "enum": ["door", "window"]}}, WAIT), ["x", "y"])),
+    ("open", "action", "Open a door or window at x,y,z (walks next to it). Doors: one try, a door that does not open is locked and is remembered (known_locked in scan_area). Windows: the game may fail to open them; the tool keeps trying (up to tries, default 10) until the window opens or jams for good (perma_locked/stuck), after that it can only be smashed.", obj(merge(XYZ, {"kind": {"type": "string", "enum": ["door", "window"]}, "tries": {"type": "number", "description": "window open attempts, default 10"}}, WAIT), ["x", "y"])),
     ("close", "action", "Close a door or window.", obj(merge(XYZ, {"kind": {"type": "string", "enum": ["door", "window"]}}, WAIT), ["x", "y"])),
     ("lock", "action", "Lock a door (needs the key).", obj(merge(XYZ, WAIT), ["x", "y"])),
     ("unlock", "action", "Unlock a door (needs the key).", obj(merge(XYZ, WAIT), ["x", "y"])),

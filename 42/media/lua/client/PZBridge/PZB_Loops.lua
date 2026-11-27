@@ -1089,6 +1089,13 @@ function L.actionJob(ctx, name, check, step, stepUI)
         if now - job.idleSince < 350 then return nil end
         if check then
             local ok, st, msg, data = pcall(check, job, player)
+            -- check поставил действие заново (повторная попытка): ждём дальше
+            if ok and st == "continue" then
+                job.idleSince = nil
+                job.seenBusy = false
+                job.startedMs = now
+                return nil
+            end
             if ok and st then return st, msg, data end
             if not ok then return "error", tostring(st) end
         end
