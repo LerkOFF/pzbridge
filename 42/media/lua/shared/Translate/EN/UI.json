@@ -75,5 +75,7 @@
     "UI_PZBridge_StepSleep": "going to sleep",
     "UI_PZBridge_StepRest": "resting",
     "UI_PZBridge_StepGlass": "picking up broken glass",
-    "UI_PZBridge_StepCloseBehind": "closing it behind me"
+    "UI_PZBridge_StepCloseBehind": "closing it behind me",
+    "UI_PZBridge_StepCraft": "crafting: %1",
+    "UI_PZBridge_StepFirstAid": "first aid: disinfect and bandage"
 }

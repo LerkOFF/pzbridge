@@ -621,6 +621,170 @@ local function pickWoundPart(p, partName)
     return best
 end
 
+-- Ремесло B42 из инвентаря (как правый клик по предмету -> рецепт):
+-- рецепты, доступные для предмета, и запуск рецепта.
+local function itemRecipes(p, it)
+    local containers = ISInventoryPaneContextMenu.getContainers(p)
+    local ok, list = pcall(CraftRecipeManager.getUniqueRecipeItems, it, p, containers)
+    if not ok or not list then return {}, containers end
+    local out = {}
+    for i = 0, list:size() - 1 do out[#out + 1] = list:get(i) end
+    return out, containers
+end
+
+local function recipeName(r)
+    return tostring(U.try(r, "getName") or "?")
+end
+
+Tool("recipes", { kind = "control", params = { "what" }, fn = function(a, ctx, p)
+    local it, err = invItem(p, a)
+    if not it then return "error", err end
+    local rs = itemRecipes(p, it)
+    local names = U.array({})
+    for _, r in ipairs(rs) do
+        local tn = U.try(r, "getTranslationName")
+        names[#names + 1] = { name = recipeName(r), title = tn and getText(tn) or nil }
+    end
+    ctx.data = { item = P.itemInfo(it, false), recipes = names }
+    return "ok", #names .. " recipes", ctx.data
+end })
+
+local function startCraft(p, it, wanted)
+    local rs = itemRecipes(p, it)
+    local recipe
+    for _, r in ipairs(rs) do
+        local n = recipeName(r)
+        if n == wanted or string.lower(n) == string.lower(tostring(wanted)) then recipe = r; break end
+    end
+    if not recipe then
+        local names = {}
+        for _, r in ipairs(rs) do names[#names + 1] = recipeName(r) end
+        return nil, "recipe " .. tostring(wanted) .. " is not available for this item; available: " .. table.concat(names, ", ")
+    end
+    ISInventoryPaneContextMenu.OnNewCraft(it, recipe, pnum(p), false)
+    return recipe
+end
+
+Tool("craft", { params = { "what", "recipe" }, fn = function(a, ctx, p)
+    local it, err = invItem(p, a)
+    if not it then return "error", err end
+    if not a.recipe then return "error", "recipe required (see the recipes tool)" end
+    local r, e = startCraft(p, it, a.recipe)
+    if not r then return "error", e end
+    local nm = tostring(it:getDisplayName())
+    return L.actionJob(ctx, "craft", nil, "crafting " .. tostring(a.recipe), T("UI_PZBridge_StepCraft", nm))
+end })
+
+-- Первая помощь: каждую рану (кровотечение первым, потом по тяжести) обработать,
+-- если есть чем (спирт, спиртовые салфетки, дезинфектор), и перевязать чистым бинтом
+-- или чистыми тряпками. Нет бинтов: порвать простыню, шторы или ненадетую одежду на тряпки.
+-- Грязные тряпки не используются.
+local function isCleanBandage(x)
+    return U.try(x, "isCanBandage") == true and not string.find(tostring(x:getFullType()), "Dirty", 1, true)
+end
+
+local function isDisinfectant(x)
+    local fc = U.try(x, "getFluidContainer")
+    if fc then
+        local amt = U.try(fc, "getAmount") or 0
+        local props = U.try(fc, "getProperties")
+        local alc = props and U.try(props, "getAlcohol") or 0
+        return amt > 0.15 and (alc / amt + 0.001) >= 0.4
+    end
+    return U.try(x, "IsDrainable") == true and U.try(x, "getAlcoholPower") == 4.0
+end
+
+local RIPPABLE = { "Base.Sheet", "Base.Curtains" }
+
+local function findRippable(p)
+    for _, it in ipairs(P.inventoryItems(p)) do
+        local ft = tostring(it:getFullType())
+        for _, r in ipairs(RIPPABLE) do if ft == r then return it, "RipSheets" end end
+    end
+    for _, it in ipairs(P.inventoryItems(p)) do
+        if instanceof(it, "Clothing") and not U.try(it, "isWorn") and not U.try(it, "isEquipped") then
+            for _, r in ipairs((itemRecipes(p, it))) do
+                if recipeName(r) == "RipClothing" then return it, "RipClothing" end
+            end
+        end
+    end
+    return nil
+end
+
+local function woundList(p)
+    local out = {}
+    local parts = p:getBodyDamage():getBodyParts()
+    for i = 0, parts:size() - 1 do
+        local bp = parts:get(i)
+        if not bp:bandaged() and ((bp:getBleedingTime() or 0) > 0 or bp:scratched() or bp:bitten() or bp:isCut() or bp:isDeepWounded()) then
+            out[#out + 1] = bp
+        end
+    end
+    table.sort(out, function(x, y)
+        local bx, by = (x:getBleedingTime() or 0) > 0, (y:getBleedingTime() or 0) > 0
+        if bx ~= by then return bx end
+        return (x:getHealth() or 100) < (y:getHealth() or 100)
+    end)
+    return out
+end
+
+Tool("first_aid", { params = {}, fn = function(a, ctx, p)
+    local wounds = woundList(p)
+    if #wounds == 0 then return "ok", "no unbandaged wounds" end
+    local inv = P.inventoryItems(p)
+    local bandages, disinf = {}, nil
+    for _, it in ipairs(inv) do
+        if isCleanBandage(it) then bandages[#bandages + 1] = it end
+        if not disinf and isDisinfectant(it) then disinf = it end
+    end
+    local plan = U.array({})
+    local ripped = nil
+    if #bandages < #wounds then
+        local src, recipe = findRippable(p)
+        if src then
+            ripped = tostring(src:getDisplayName())
+            startCraft(p, src, recipe)
+            plan[#plan + 1] = "rip " .. ripped
+        end
+    end
+    -- обработка и бинты ставятся в очередь после разрыва: бинты берутся, когда дойдёт очередь
+    local state = { i = 0, wounds = wounds, done = U.array({}), disinfected = 0, noBandage = 0 }
+    local function queueNext(pl)
+        state.i = state.i + 1
+        local bp = state.wounds[state.i]
+        if not bp then return false end
+        local name = tostring(bp:getType())
+        local d
+        for _, it in ipairs(P.inventoryItems(pl)) do if isDisinfectant(it) then d = it; break end end
+        if d and (U.try(bp, "getAlcoholLevel") or 0) <= 0 then
+            ISInventoryPaneContextMenu.transferIfNeeded(pl, d)
+            ISTimedActionQueue.add(ISDisinfect:new(pl, pl, d, bp))
+            state.disinfected = state.disinfected + 1
+        end
+        local b
+        for _, it in ipairs(P.inventoryItems(pl)) do if isCleanBandage(it) then b = it; break end end
+        if b then
+            ISInventoryPaneContextMenu.transferIfNeeded(pl, b)
+            ISTimedActionQueue.add(ISApplyBandage:new(pl, pl, b, bp, true))
+            state.done[#state.done + 1] = name
+        else
+            state.noBandage = state.noBandage + 1
+        end
+        return true
+    end
+    if not ripped then queueNext(p) end
+    local nm = "first aid"
+    return L.actionJob(ctx, "first_aid", function(job, pl)
+        -- очередь пуста: следующая рана
+        if queueNext(pl) then return "continue" end
+        local left = woundList(pl)
+        local msg = "bandaged: " .. table.concat(state.done, ", ") .. "; disinfected " .. state.disinfected
+        if ripped then msg = msg .. "; ripped " .. ripped .. " into rags" end
+        if #left > 0 then msg = msg .. "; still unbandaged " .. #left .. " (no clean bandages)" end
+        return (#left == 0) and "done" or "failed", msg, { bandaged = state.done, disinfected = state.disinfected, left = #left }
+    end, "first aid", T("UI_PZBridge_StepFirstAid"))
+end })
+
 Tool("use", { params = { "what", "how" }, fn = function(a, ctx, p)
     local how = a.how or "eat"
     local percent = num(a.percent) or 1
@@ -705,9 +869,15 @@ Tool("drink_from", { params = { "x", "y", "z" }, fn = function(a, ctx, p)
     if (U.try(o, "getFluidAmount") or 0) <= 0 then return "error", "water source is empty" end
     local thirst = CharacterStat and p:getStats():get(CharacterStat.THIRST) or 0
     if thirst < 0.05 then return "error", "character is not thirsty" end
-    ISWorldObjectContextMenu.onDrink(nil, o, pnum(p))
+    if not luautils.walkAdjObject(p, o, true, true) then return "error", "cannot reach the water source" end
+    ISTimedActionQueue.add(ISTakeWaterAction:new(p, nil, o, U.try(o, "isTaintedWater") == true))
     local on = tostring(P.objectName(o))
-    return L.actionJob(ctx, "drink_from", nil, "drinking from " .. on, T("UI_PZBridge_StepDrinkFrom", on))
+    return L.actionJob(ctx, "drink_from", function(job, pl)
+        -- проверяем по жажде: путь мог не найтись, и тогда персонаж не попил
+        local now = CharacterStat and pl:getStats():get(CharacterStat.THIRST) or 0
+        if now < thirst - 0.02 then return "done", "drank, thirst " .. U.round(thirst, 2) .. " -> " .. U.round(now, 2) end
+        return "failed", "did not drink: could not reach the source (locked building?)"
+    end, "drinking from " .. on, T("UI_PZBridge_StepDrinkFrom", on))
 end })
 
 Tool("drink", { params = { "what" }, fn = function(a, ctx, p)
