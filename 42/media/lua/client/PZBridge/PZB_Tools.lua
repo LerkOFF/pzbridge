@@ -256,7 +256,15 @@ Tool("pause", { kind = "control", fn = function(a, ctx, p)
     return "ok", "paused"
 end })
 
+-- Явно сняли паузу, зная про зомби рядом: автопауза не срабатывает сразу снова
+-- (повторно только если зомби вплотную, ближе 2 клеток, и прошло 8 секунд).
+local function disarmAutopause()
+    S.autoPauseArmed = false
+    S.lastAutoPauseMs = U.nowMs()
+end
+
 Tool("unpause", { kind = "control", fn = function(a, ctx, p)
+    disarmAutopause()
     setPause(false)
     S.alert = nil
     return "ok", "game running"
@@ -386,6 +394,9 @@ end })
 
 Tool("fight", { params = { "until", "radius" }, fn = function(a, ctx, p)
     if a.kills and not a["until"] then a["until"] = "kills:" .. tostring(a.kills) end
+    -- бой идёт к зомби намеренно: автопаузу не ждём, паузу снимаем
+    disarmAutopause()
+    if a.unpause ~= false then setPause(false); S.alert = nil end
     if a.radius then a.radius = num(a.radius) end
     return L.startFight(ctx, p, a)
 end })
