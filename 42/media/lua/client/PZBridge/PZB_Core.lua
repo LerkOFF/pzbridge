@@ -50,6 +50,7 @@ PZBridge.S = PZBridge.S or {}
 local S = PZBridge.S
 
 function PZBridge.resetSession()
+    S.memFileLoaded = false
     S.enabled = false          -- true только в одиночной игре
     S.access = false           -- включает только игрок в окне F9, не сохраняется
     S.lastCmdId = 0
@@ -95,6 +96,41 @@ end
 -- Память, сохраняемая в save через modData игрока
 ---------------------------------------------------------------------------
 
+-- Знания, которые не должны теряться при загрузке сохранения без сохранения
+-- (modData откатывается вместе с сохранением): запертые двери, здания, куда не
+-- пройти, отмеченные места. Хранятся в отдельном файле на каждый мир.
+local PERSIST_KEYS = { "lockedDoors", "blockedBuildings", "places" }
+
+local function memFileName()
+    local w = "world"
+    local ok, r = pcall(function() return getWorld():getWorld() end)
+    if ok and r then w = tostring(r) end
+    w = string.gsub(w, "[^%w_%-]", "_")
+    return "pzbridge_mem_" .. w .. ".json"
+end
+
+function PZBridge.loadMemFile(m)
+    local lines = U.readLines(memFileName())
+    if #lines == 0 then return end
+    local ok, data = pcall(U.jsonDecode, table.concat(lines, "\n"))
+    if not ok or type(data) ~= "table" then return end
+    for _, k in ipairs(PERSIST_KEYS) do
+        if type(data[k]) == "table" then
+            m[k] = m[k] or {}
+            for kk, vv in pairs(data[k]) do
+                if m[k][kk] == nil then m[k][kk] = vv end
+            end
+        end
+    end
+end
+
+function PZBridge.saveMemFile()
+    local m = PZBridge.mem()
+    local out = {}
+    for _, k in ipairs(PERSIST_KEYS) do out[k] = m[k] or {} end
+    pcall(U.writeFile, memFileName(), U.jsonEncode(out))
+end
+
 function PZBridge.mem()
     local p = getSpecificPlayer(0)
     if not p then return { places = {}, visitedBuildings = {}, visitedContainers = {}, knownContainers = {} } end
@@ -105,6 +141,12 @@ function PZBridge.mem()
     m.visitedBuildings = m.visitedBuildings or {}
     m.visitedContainers = m.visitedContainers or {}
     m.knownContainers = m.knownContainers or {}
+    m.lockedDoors = m.lockedDoors or {}
+    m.blockedBuildings = m.blockedBuildings or {}
+    if not S.memFileLoaded then
+        S.memFileLoaded = true
+        PZBridge.loadMemFile(m)
+    end
     return m
 end
 

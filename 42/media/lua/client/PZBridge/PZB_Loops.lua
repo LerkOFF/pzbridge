@@ -205,6 +205,7 @@ function L.markLocked(o)
     mem.lockedDoors = mem.lockedDoors or {}
     if not mem.lockedDoors[k] then
         mem.lockedDoors[k] = PZBridge.gameTimeStr()
+        PZBridge.saveMemFile()
         local sq = o:getSquare()
         if P.isWindow(o) then
             PZBridge.event("window_stuck", { x = sq:getX(), y = sq:getY(), z = sq:getZ() },
@@ -263,6 +264,39 @@ function L.queueClose(player, o)
     else
         ISTimedActionQueue.add(ISOpenCloseWindow:new(player, o))
     end
+end
+
+-- Здание, куда не пройти (путь упёрся в запертую дверь). Цели внутри него
+-- пропускаются, пока игрок снаружи; запись снимается, когда игрок оказался внутри.
+function L.buildingOfSquare(sq)
+    local b = sq and sq:getBuilding()
+    if not b then return nil end
+    return (P.buildingKey(b))
+end
+
+function L.markBlockedBuilding(bkey, why)
+    if not bkey then return end
+    local mem = PZBridge.mem()
+    if not mem.blockedBuildings[bkey] then
+        mem.blockedBuildings[bkey] = PZBridge.gameTimeStr()
+        PZBridge.saveMemFile()
+        PZBridge.event("building_blocked", { building = bkey, reason = why }, "cannot get into building " .. tostring(bkey) .. ": " .. tostring(why))
+    end
+end
+
+function L.isBlockedFor(player, sq)
+    local bkey = L.buildingOfSquare(sq)
+    if not bkey then return false end
+    local mem = PZBridge.mem()
+    if not mem.blockedBuildings[bkey] then return false end
+    local mine = L.buildingOfSquare(player:getCurrentSquare())
+    if mine == bkey then
+        -- игрок внутри: значит, войти можно, снимаем отметку
+        mem.blockedBuildings[bkey] = nil
+        PZBridge.saveMemFile()
+        return false
+    end
+    return true
 end
 
 -- Босиком и впереди (ближе к цели, в пределах клетки) лежит битое стекло?
@@ -940,7 +974,8 @@ function L.startFight(ctx, p, args)
         for _, z in ipairs(zs) do
             local un = job.unreachable and job.unreachable[z.id]
             if un and nowMs - un > 60000 then job.unreachable[z.id] = nil; un = nil end
-            if math.abs(z.z - player:getZ()) < 1 and (not un or z.dist <= 2) then
+            local blocked = z.dist > 2 and z.obj and L.isBlockedFor(player, z.obj:getCurrentSquare())
+            if math.abs(z.z - player:getZ()) < 1 and (not un or z.dist <= 2) and not blocked then
                 if z.targeting and z.dist <= radius then return z, zs end
                 if not best then best = z end
             end
@@ -1179,6 +1214,10 @@ function L.startFight(ctx, p, args)
                 job.mover = nil
                 job.unreachable = job.unreachable or {}
                 job.unreachable[target.id] = now
+                if string.find(tostring(why), "locked door", 1, true) and z then
+                    local tb = L.buildingOfSquare(z:getCurrentSquare())
+                    if tb and tb ~= L.buildingOfSquare(player:getCurrentSquare()) then L.markBlockedBuilding(tb, why) end
+                end
                 PZBridge.event("target_unreachable", { zombie = target.id, reason = tostring(why) }, "cannot reach zombie " .. tostring(target.id) .. ": " .. tostring(why))
             end
             return nil

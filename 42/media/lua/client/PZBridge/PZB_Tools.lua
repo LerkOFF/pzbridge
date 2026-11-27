@@ -347,12 +347,14 @@ Tool("mark_place", { kind = "control", params = { "name", "x", "y", "z" }, fn = 
     local b = P.square(x, y, z)
     local bkey = b and b:getBuilding() and P.buildingKey(b:getBuilding()) or nil
     mem.places[tostring(a.name)] = { x = x, y = y, z = z, note = a.note, building = bkey, t = PZBridge.gameTimeStr() }
+    PZBridge.saveMemFile()
     return "ok", "place marked: " .. tostring(a.name), mem.places[tostring(a.name)]
 end })
 
 Tool("forget_place", { kind = "control", params = { "name" }, fn = function(a, ctx, p)
     local mem = PZBridge.mem()
     mem.places[tostring(a.name)] = nil
+    PZBridge.saveMemFile()
     return "ok", "place forgotten"
 end })
 
