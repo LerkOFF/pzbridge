@@ -92,7 +92,7 @@ FILTER = {
     "description": ("Item filter. category: food, drink, water_clean, water_dirty, weapon, firearm, medical, tool, "
                     "clothing, ammo, container, literature, water_container, any. Other fields narrow it down."),
     "properties": {
-        "category": {"type": "string"},
+        "category": {"type": "string", "description": "food, drink, water, water_clean, water_dirty, weapon, firearm, medical, ammo, clothing, tool, container, skill_book, recipe_magazine, literature, water_container, other"},
         "fullType": {"type": "string", "description": "e.g. Base.Hammer"},
         "name": {"type": "string", "description": "case-insensitive substring of name or fullType"},
         "tag": {"type": "string", "description": "ItemTag name, e.g. HAMMER"},

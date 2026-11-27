@@ -162,7 +162,13 @@ function P.itemCategory(item)
     if U.try(item, "IsClothing") then return "clothing" end
     if dc == "Tool" or dc == "ToolWeapon" or dc == "Cooking" or dc == "Gardening" then return "tool" end
     if instanceof(item, "InventoryContainer") then return "container" end
-    if U.try(item, "IsLiterature") then return "literature" end
+    if U.try(item, "IsLiterature") then
+        -- книги навыков и журналы с рецептами: ценный лут
+        if U.try(item, "getSkillTrained") then return "skill_book" end
+        local rec = U.try(item, "getTeachedRecipes")
+        if rec and U.try(rec, "size") and rec:size() > 0 then return "recipe_magazine" end
+        return "literature"
+    end
     if dc == "WaterContainer" then return "water_container" end
     return "other"
 end
