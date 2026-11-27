@@ -124,7 +124,9 @@ function Mover:dest(player)
         local d = math.sqrt(dx * dx + dy * dy)
         for step = 35, 10, -5 do
             if step < d then
-                local wsq = P.square(math.floor(px + dx / d * step), math.floor(py + dy / d * step), math.floor(player:getZ()))
+                -- промежуточная точка на уровне цели (из подвала тоже: путь сам поднимется по лестнице)
+                local wx, wy = math.floor(px + dx / d * step), math.floor(py + dy / d * step)
+                local wsq = P.square(wx, wy, self.tz) or P.square(wx, wy, math.floor(player:getZ()))
                 if wsq then
                     if U.try(wsq, "isFree", false) then self.waypoint = true; return wsq end
                     local adj = AdjacentFreeTileFinder.Find(wsq, player)
