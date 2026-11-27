@@ -78,5 +78,7 @@
     "UI_PZBridge_StepCloseBehind": "closing it behind me",
     "UI_PZBridge_StepCraft": "crafting: %1",
     "UI_PZBridge_StepFirstAid": "first aid: disinfect and bandage",
-    "UI_PZBridge_Alarm": "Alarm! The whole area will come here. Leaving."
+    "UI_PZBridge_Alarm": "Alarm! The whole area will come here. Leaving.",
+    "UI_PZBridge_StepVehicle": "vehicle",
+    "UI_PZBridge_StepDrive": "driving"
 }
