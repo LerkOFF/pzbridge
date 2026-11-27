@@ -833,7 +833,10 @@ function P.body(player)
         bleeding_parts = U.try(bd, "getNumPartsBleeding") or 0,
         bitten_parts = U.try(bd, "getNumPartsBitten") or 0,
         scratched_parts = U.try(bd, "getNumPartsScratched") or 0,
+        -- заражение зомби (вирус Нокса), отдельно от ложного заражения (ипохондрик)
+        -- и от инфекции раны (infected_wound у части тела)
         infected = U.try(bd, "IsInfected") == true,
+        fake_infected = U.try(bd, "IsFakeInfected") == true,
         barefoot = P.barefoot(player),
         wounds = U.array({}),
     }
@@ -848,6 +851,9 @@ function P.body(player)
             }
             local any = false
             if bleeding then w.bleeding = true; any = true end
+            if U.try(bp, "IsInfected") == true then w.zombie_infected = true; any = true end
+            if (U.try(bp, "getWoundInfectionLevel") or 0) > 0 then w.infected_wound = true; any = true end
+            if U.try(bp, "bandaged") then w.bandaged = true end
             if U.try(bp, "bitten") then w.bitten = true; any = true end
             if U.try(bp, "scratched") then w.scratched = true; any = true end
             if U.try(bp, "isCut") then w.cut = true; any = true end
