@@ -38,7 +38,7 @@ The game runs in real time; you think slowly, so long behaviours (walking, searc
 fleeing) run inside the mod as loops, and you orchestrate them with small tool calls.
 
 BEFORE PLAYING read the survival rules once: get_rules (or resource pzbridge://rules) and get_sandbox.
-Key rules: never fight 3+ zombies (leave), first_aid right after every fight, loot corpses after a fight,
+Key rules: never fight 3+ zombies (leave), first_aid right after every fight, loot corpses after a fight, a house alarm means leave at once (the mod flees by itself, event alarm),
 pause the game while you think and unpause only to act.
 
 ALWAYS START with get_player_messages. If access=false, call reply_to_player asking the player to

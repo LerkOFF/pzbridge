@@ -77,5 +77,6 @@
     "UI_PZBridge_StepGlass": "собираю битое стекло",
     "UI_PZBridge_StepCloseBehind": "закрываю за собой",
     "UI_PZBridge_StepCraft": "мастерю: %1",
-    "UI_PZBridge_StepFirstAid": "первая помощь: обработка и перевязка"
+    "UI_PZBridge_StepFirstAid": "первая помощь: обработка и перевязка",
+    "UI_PZBridge_Alarm": "Сигнализация! Сюда сбежится вся округа. Ухожу."
 }

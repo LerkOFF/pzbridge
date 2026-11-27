@@ -77,5 +77,6 @@
     "UI_PZBridge_StepGlass": "picking up broken glass",
     "UI_PZBridge_StepCloseBehind": "closing it behind me",
     "UI_PZBridge_StepCraft": "crafting: %1",
-    "UI_PZBridge_StepFirstAid": "first aid: disinfect and bandage"
+    "UI_PZBridge_StepFirstAid": "first aid: disinfect and bandage",
+    "UI_PZBridge_Alarm": "Alarm! The whole area will come here. Leaving."
 }

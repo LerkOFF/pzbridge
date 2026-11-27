@@ -372,6 +372,11 @@ local function onTickGame()
     if not p then return end
     local now = U.nowMs()
     if S.access then pcall(L.lockedDoorWatch, p, now) end
+    if S.access and now - (S.lastAlarmCheck or 0) >= 1000 then
+        S.lastAlarmCheck = now
+        local ok, err = pcall(L.alarmWatch, p, now)
+        if not ok then U.log("alarm watch error: " .. tostring(err)) end
+    end
     if now - lastJob >= PZBridge.config.jobIntervalMs then
         lastJob = now
         if S.job and not S.access then PZBridge.stopAll("access off") end

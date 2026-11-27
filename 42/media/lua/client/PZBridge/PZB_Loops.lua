@@ -402,6 +402,50 @@ function L.lockedDoorWatch(player, now)
     end
 end
 
+-- Сторож сигнализации. Игра, запуская сигнализацию дома, снимает с него флаг alarmed.
+-- Смена флага с true на false у дома рядом = сигнализация сработала: на звук
+-- (около 600 клеток) сбегутся зомби со всей округи. Рефлекс: бросить дело,
+-- убежать от дома, пометить его, не возвращаться.
+local alarmCache = { list = nil, at = 0, state = {} }
+function L.alarmWatch(player, now)
+    local px, py = player:getX(), player:getY()
+    if not alarmCache.list or now - alarmCache.at > 10000 then
+        alarmCache.at = now
+        alarmCache.list = {}
+        local all = U.try(getWorld():getMetaGrid(), "getBuildings")
+        if all then
+            for i = 0, all:size() - 1 do
+                local def = all:get(i)
+                local cx, cy = (def:getX() + def:getX2()) / 2, (def:getY() + def:getY2()) / 2
+                if U.dist(cx, cy, px, py) <= 60 then alarmCache.list[#alarmCache.list + 1] = def end
+            end
+        end
+    end
+    for _, def in ipairs(alarmCache.list) do
+        local key = U.try(def, "getIDString") or tostring(U.try(def, "getID"))
+        local now_al = U.try(def, "isAlarmed") == true
+        local was = alarmCache.state[key]
+        alarmCache.state[key] = now_al
+        if was == true and now_al == false then
+            local cx, cy = (def:getX() + def:getX2()) / 2, (def:getY() + def:getY2()) / 2
+            local d = U.dist(cx, cy, px, py)
+            if d <= 40 then
+                local mem = PZBridge.mem()
+                mem.alarmBuildings = mem.alarmBuildings or {}
+                mem.alarmBuildings[key] = PZBridge.gameTimeStr()
+                mem.blockedBuildings[key] = mem.blockedBuildings[key] or ("alarm " .. PZBridge.gameTimeStr())
+                PZBridge.saveMemFile()
+                PZBridge.event("alarm", { building = key, x = math.floor(cx), y = math.floor(cy), dist = U.round(d, 1) },
+                    "house alarm went off: zombies from the whole area will come; leaving")
+                PZBridge.notify(T("UI_PZBridge_Alarm"), true)
+                if S.job then PZBridge.stopJob("alarm", "interrupted") end
+                if isGamePaused() then PZBridge.setPause(false) end
+                L.startFlee({ id = nil, tool = "flee" }, player, { distance = 60, mode = "run", x = cx, y = cy })
+            end
+        end
+    end
+end
+
 -- Открытая дверь или целое открытое окно рядом с игроком (то, через что он только что вошёл).
 function L.openingBehind(player)
     local best, bestD
