@@ -844,13 +844,27 @@ function L.headPoint(z, player, offset)
         local sgn = (U.try(z, "isFallOnFront") == true) and 1 or -1
         dirx, diry = fx * sgn, fy * sgn
     end
-    -- клетка головы от игры (по кости головы): при расхождении верим ей
+    -- Клетка головы от игры (по кости головы) - главный источник, направление
+    -- взгляда только уточняет угол. Если зомби упал вбок, взгляд может не совпасть
+    -- с телом: тогда (расхождение больше 50 градусов) берём направление на клетку головы.
+    L.lastHeadSrc = dirx and "facing" or "none"
     local hs = U.try(z, "getHeadSquare", player)
     if hs then
         local hx, hy = hs:getX() + 0.5 - zx, hs:getY() + 0.5 - zy
         local d = math.sqrt(hx * hx + hy * hy)
-        if d > 0.3 and (not dirx or (dirx * hx + diry * hy) < 0) then
-            dirx, diry = hx / d, hy / d
+        if d > 0.3 then
+            local ux, uy = hx / d, hy / d
+            local agree = false
+            if dirx then
+                local n = math.sqrt(dirx * dirx + diry * diry)
+                if n > 0.01 then agree = ((dirx * ux + diry * uy) / n) > 0.64 end
+            end
+            if agree then
+                L.lastHeadSrc = "facing+square"
+            else
+                dirx, diry = ux, uy
+                L.lastHeadSrc = "square"
+            end
         end
     end
     if dirx then
@@ -1085,7 +1099,7 @@ function L.startFight(ctx, p, args)
             -- так зомби прижат, а удар ногой приходится в голову
             local zx, zy, zzz = L.headPoint(zo, player, args.stand_offset or 0.35)
             local hd = U.dist(player:getX(), player:getY(), zx, zy)
-            job.step = job.step .. ", to head " .. tostring(U.round(hd, 2)) .. ", tries " .. tostring(tries)
+            job.step = job.step .. ", to chest " .. tostring(U.round(hd, 2)) .. ", tries " .. tostring(tries) .. ", head by " .. tostring(L.lastHeadSrc)
             local onTopDist = args.on_top_dist or 0.35
             if hd > onTopDist and tries < 6 then
                 if job.mover then job.mover:cancel(player); job.mover = nil end
