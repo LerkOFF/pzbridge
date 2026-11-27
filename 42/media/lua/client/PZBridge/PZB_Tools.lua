@@ -688,7 +688,8 @@ Tool("map", { kind = "control", params = { "radius", "type", "limit" }, fn = fun
                     id = key, type = t, dist = U.round(d, 0), dir = compass(cx - px, cy - py),
                     x = math.floor(cx), y = math.floor(cy), size = (x2 - x1) .. "x" .. (y2 - y1),
                     rooms = table.concat(rl, ","), visited = mem.visitedBuildings[key] == true,
-                    blocked = mem.blockedBuildings and mem.blockedBuildings[key] ~= nil or false,
+                    blocked = (not L.expireAlarm(key)) and mem.blockedBuildings and mem.blockedBuildings[key] ~= nil or false,
+                    alarm = mem.alarmBuildings and mem.alarmBuildings[key] ~= nil or false,
                     explored = U.try(def, "isAllExplored") == true,
                 }
                 if kinds.levels then

@@ -431,8 +431,9 @@ function L.alarmWatch(player, now)
             local d = U.dist(cx, cy, px, py)
             if d <= 40 then
                 local mem = PZBridge.mem()
+                -- отметка временная: толпа со временем расходится, через ALARM_HOURS можно вернуться
                 mem.alarmBuildings = mem.alarmBuildings or {}
-                mem.alarmBuildings[key] = PZBridge.gameTimeStr()
+                mem.alarmBuildings[key] = getGameTime():getWorldAgeHours()
                 mem.blockedBuildings[key] = mem.blockedBuildings[key] or ("alarm " .. PZBridge.gameTimeStr())
                 PZBridge.saveMemFile()
                 PZBridge.event("alarm", { building = key, x = math.floor(cx), y = math.floor(cy), dist = U.round(d, 1) },
@@ -491,10 +492,27 @@ function L.markBlockedBuilding(bkey, why)
     end
 end
 
+L.ALARM_HOURS = 12
+
+-- Снять отметку «сигнализация», если прошло достаточно игровых часов.
+function L.expireAlarm(bkey)
+    local mem = PZBridge.mem()
+    local t = mem.alarmBuildings and mem.alarmBuildings[bkey]
+    if type(t) == "number" and getGameTime():getWorldAgeHours() - t >= L.ALARM_HOURS then
+        mem.alarmBuildings[bkey] = nil
+        mem.blockedBuildings[bkey] = nil
+        PZBridge.saveMemFile()
+        PZBridge.event("alarm_cooled", { building = bkey }, "alarm house can be visited again (crowd should have dispersed); approach sneaking and scan first")
+        return true
+    end
+    return false
+end
+
 function L.isBlockedFor(player, sq)
     local bkey = L.buildingOfSquare(sq)
     if not bkey then return false end
     local mem = PZBridge.mem()
+    L.expireAlarm(bkey)
     if not mem.blockedBuildings[bkey] then return false end
     local mine = L.buildingOfSquare(player:getCurrentSquare())
     if mine == bkey then

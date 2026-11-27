@@ -99,7 +99,7 @@ end
 -- Знания, которые не должны теряться при загрузке сохранения без сохранения
 -- (modData откатывается вместе с сохранением): запертые двери, здания, куда не
 -- пройти, отмеченные места. Хранятся в отдельном файле на каждый мир.
-local PERSIST_KEYS = { "lockedDoors", "blockedBuildings", "places" }
+local PERSIST_KEYS = { "lockedDoors", "blockedBuildings", "places", "alarmBuildings" }
 
 local function memFileName()
     local w = "world"
