@@ -109,6 +109,7 @@ function PZBridge.pollCommands(skipOnly)
             if id > maxId then maxId = id end
             if not skipOnly then
                 S.lastCmdId = id
+                S.lastAgentCmdMs = U.nowMs()
                 if err then
                     PZBridge.setResult(id, tool, "error", err)
                 else
@@ -251,6 +252,9 @@ end
 
 function PZBridge.guardTick(p, now)
     if not S.access then return end
+    -- автопауза нужна, только когда действует агент: идёт задача или была команда недавно.
+    -- Если доступ включён, но играет сам игрок, не мешать ему паузами.
+    if not S.job and now - (S.lastAgentCmdMs or 0) > 120000 then return end
     local g = PZBridge.guard
     if S.job and (S.job.name == "fight" or S.job.name == "flee") then return end
     local t = P.threat(p, g)
