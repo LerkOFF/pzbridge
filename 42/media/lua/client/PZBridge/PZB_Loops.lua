@@ -837,13 +837,27 @@ end
 -- совпадает с клеткой тела или недоступна, остаётся центр тела.
 function L.headPoint(z, player)
     local zx, zy, zz = z:getX(), z:getY(), z:getZ()
+    -- направление от центра тела к голове: лицом вниз голова впереди, на спине - сзади
+    local dirx, diry
+    local fx, fy = U.try(z, "getForwardDirectionX"), U.try(z, "getForwardDirectionY")
+    if fx and fy then
+        local sgn = (U.try(z, "isFallOnFront") == true) and 1 or -1
+        dirx, diry = fx * sgn, fy * sgn
+    end
+    -- клетка головы от игры (по кости головы): при расхождении верим ей
     local hs = U.try(z, "getHeadSquare", player)
     if hs then
-        local hx, hy = hs:getX() + 0.5, hs:getY() + 0.5
-        local dx, dy = hx - zx, hy - zy
-        local d = math.sqrt(dx * dx + dy * dy)
-        if d > 0.3 then
-            return zx + dx / d * 0.65, zy + dy / d * 0.65, zz, true
+        local hx, hy = hs:getX() + 0.5 - zx, hs:getY() + 0.5 - zy
+        local d = math.sqrt(hx * hx + hy * hy)
+        if d > 0.3 and (not dirx or (dirx * hx + diry * hy) < 0) then
+            dirx, diry = hx / d, hy / d
+        end
+    end
+    if dirx then
+        local n = math.sqrt(dirx * dirx + diry * diry)
+        if n > 0.01 then
+            local off = L.headOffset or 0.85
+            return zx + dirx / n * off, zy + diry / n * off, zz, true
         end
     end
     return zx, zy, zz, false
@@ -1047,6 +1061,7 @@ function L.startFight(ctx, p, args)
         end
         if standingIn then
             if job.mover then job.mover:cancel(player); job.mover = nil end
+            if job.closeStep then ISTimedActionQueue.clear(player); job.closeStep = nil; job.closeTries = 0 end
             if job.stepTo then ISTimedActionQueue.clear(player); job.stepTo = nil end
             local doShove = crowd >= 2 and args.shove ~= false
             job.step = (doShove and "shoving " or "hitting ") .. tostring(standingIn.id) .. ", standing nearby " .. crowd .. ", killed " .. k
@@ -1068,8 +1083,9 @@ function L.startFight(ctx, p, args)
             local zo = downedNear.obj
             local zx, zy, zzz = L.headPoint(zo, player)
             local hd = U.dist(player:getX(), player:getY(), zx, zy)
+            job.step = job.step .. ", to head " .. tostring(U.round(hd, 2)) .. ", tries " .. tostring(tries)
             local onTopDist = args.on_top_dist or 0.45
-            if hd > onTopDist and tries < 4 then
+            if hd > onTopDist and tries < 6 then
                 if job.mover then job.mover:cancel(player); job.mover = nil end
                 local moved = job.stepTo ~= nil and U.dist(job.stepTo[1], job.stepTo[2], zx, zy) > 0.35
                 local fresh = job.stepTo == nil or job.stepToId ~= downedNear.id
@@ -1086,8 +1102,8 @@ function L.startFight(ctx, p, args)
                 ISTimedActionQueue.clear(player)
                 job.stepTo = nil
             end
-            if downedNear.dist <= range + 0.3 and now - job.lastAttackMs > interval then
-                local finish = args.finish or "stomp"
+            -- бить, только стоя у головы (или если подойти так и не вышло)
+            if (hd <= 0.8 or tries >= 6) and downedNear.dist <= range + 0.3 and now - job.lastAttackMs > interval then
                 local ok
                 ok = L.finishDowned(player, downedNear.obj, finish)
                 if ok then job.lastAttackMs = now end
@@ -1105,6 +1121,30 @@ function L.startFight(ctx, p, args)
             if target.targeting and target.dist < 3.5 and not downed then
                 if job.mover then job.mover:cancel(player); job.mover = nil end
                 pcall(player.faceThisObject, player, z)
+                return nil
+            end
+            -- вплотную (до 2.5 клетки), но удар не достаёт: шаг по точным координатам на дистанцию удара
+            -- (ходьба по клеткам считает соседнюю клетку «пришёл», а с неё удар не достаёт)
+            if target.dist <= 2.5 and not downed then
+                if job.mover then job.mover:cancel(player); job.mover = nil end
+                local zx, zy = z:getX(), z:getY()
+                local px, py = player:getX(), player:getY()
+                local d = math.max(0.01, U.dist(px, py, zx, zy))
+                local want = math.max(0.5, range - 0.35)
+                local tx, ty = zx + (px - zx) / d * want, zy + (py - zy) / d * want
+                local moved = job.closeStep and U.dist(job.closeStep[1], job.closeStep[2], tx, ty) > 0.4
+                if not job.closeStep or moved or not P.isBusy(player) then
+                    job.closeTries = (job.closeTries or 0) + 1
+                    if job.closeTries > 12 then
+                        job.closeTries = 0
+                        job.unreachable = job.unreachable or {}
+                        job.unreachable[target.id] = now
+                        return nil
+                    end
+                    ISTimedActionQueue.clear(player)
+                    ISTimedActionQueue.add(ISPathFindAction:pathToLocationF(player, tx, ty, z:getZ()))
+                    job.closeStep = { tx, ty }
+                end
                 return nil
             end
             local need = (job.mover == nil) or (job.moverFor ~= target.id)
@@ -1129,6 +1169,7 @@ function L.startFight(ctx, p, args)
         end
         -- в радиусе удара
         if job.mover then job.mover:cancel(player); job.mover = nil end
+        if job.closeStep then ISTimedActionQueue.clear(player); job.closeStep = nil; job.closeTries = 0 end
         if now - job.lastAttackMs > interval then
             if L.attack(player, z) then job.lastAttackMs = now end
         end
