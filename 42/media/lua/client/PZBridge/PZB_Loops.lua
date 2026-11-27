@@ -821,20 +821,26 @@ function L.startFight(ctx, p, args)
         job.noTargetSince = nil
         local range = L.weaponRange(player)
         local z = target.obj
+        -- лежачий или ползущий зомби сам не подойдёт: идти к нему вплотную и добивать
+        local downed = target.on_floor or target.crawling
+        if downed then range = range + 0.2 end
         job.step = "target " .. tostring(target.id) .. " at " .. tostring(target.dist) .. " tiles, killed " .. k
         job.stepUI = T("UI_PZBridge_StepTarget", tostring(target.id), target.dist, k)
         if target.dist > range then
             -- зомби сам идёт ко мне: стоять и ждать, иначе подходить
-            if target.targeting and target.dist < 3.5 then
+            if target.targeting and target.dist < 3.5 and not downed then
                 if job.mover then job.mover:cancel(player); job.mover = nil end
                 pcall(player.faceThisObject, player, z)
                 return nil
             end
             local need = (job.mover == nil) or (job.moverFor ~= target.id)
                 or (job.moverAt and U.dist(job.moverAt[1], job.moverAt[2], target.x, target.y) > 1.5)
+                or (job.moverDowned ~= downed)
             if need then
-                job.mover = L.newMover(target.x, target.y, target.z, { mode = (target.dist > 8) and "sneak" or "walk", adjacent = true, max_repaths = 2, open_doors = true })
+                if job.mover then job.mover:cancel(player) end
+                job.mover = L.newMover(target.x, target.y, target.z, { mode = (target.dist > 8) and "sneak" or "walk", adjacent = not downed, max_repaths = 2, open_doors = true })
                 job.moverFor = target.id
+                job.moverDowned = downed
                 job.moverAt = { target.x, target.y }
             end
             local st = job.mover:update(player, now, nil)
