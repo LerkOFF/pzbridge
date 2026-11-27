@@ -317,6 +317,21 @@ Tool("say", { kind = "control", params = { "text" }, fn = function(a, ctx, p)
     return "ok", "said"
 end })
 
+-- Крик (клавиша Q в игре): стоя - громко, зомби вокруг слышат и идут на звук;
+-- крадучись - шёпот. whisper=true/false временно включает или выключает скрытность.
+Tool("shout", { params = { "whisper" }, fn = function(a, ctx, p)
+    local wasSneak = p:isSneaking()
+    if a.whisper == true and not wasSneak then p:setSneaking(true) end
+    if a.whisper == false and wasSneak then p:setSneaking(false) end
+    local quiet = p:isSneaking()
+    local ok = pcall(p.Callout, p, true)
+    if a.whisper ~= nil then p:setSneaking(wasSneak) end
+    if not ok then return "error", "callout failed" end
+    PZBridge.event("shout", { loud = not quiet }, quiet and "whispered" or "shouted loud")
+    if quiet then return "ok", "whispered (quiet, almost no noise)" end
+    return "ok", "shouted loud: zombies nearby will hear it and come"
+end })
+
 Tool("mark_place", { kind = "control", params = { "name", "x", "y", "z" }, fn = function(a, ctx, p)
     if not a.name or a.name == "" then return "error", "place name required" end
     local x, y, z = num(a.x) or math.floor(p:getX()), num(a.y) or math.floor(p:getY()), num(a.z) or math.floor(p:getZ())

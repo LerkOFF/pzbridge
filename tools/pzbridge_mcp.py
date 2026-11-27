@@ -162,7 +162,7 @@ GAME_TOOLS = [
                 "radius": {"type": "number"}, "take": {"type": "boolean", "description": "take the first match into inventory"},
                 "max_containers": {"type": "number"}, "include_visited": {"type": "boolean"}, "include_corpses": {"type": "boolean"},
                 "mode": MODE}, GUARD_PROPS, WAIT))),
-    ("fight", "action", "Melee combat loop: picks the best weapon, approaches, faces, attacks; steps onto downed zombies so they cannot get up and stomps them; with 2+ zombies close it shoves one down and fights the rest standing on it. until: 'clear' (no zombies in radius), 'kills:N' (at least N kills AND nobody is still chasing the player), 'target:<zombie id>'. Guard retreats and ends with status paused (resume to continue). Firearms only with firearms=true.",
+    ("fight", "action", "Melee combat loop: picks the best weapon, approaches, faces, attacks; steps onto downed zombies at the head (the game computes the head square from the head bone) so they cannot get up, faces the head and stomps it - head hits kill much faster; with 2+ zombies close it shoves one down and fights the rest standing on it. until: 'clear' (no zombies in radius), 'kills:N' (at least N kills AND nobody is still chasing the player), 'target:<zombie id>'. Guard retreats and ends with status paused (resume to continue). Firearms only with firearms=true.",
      obj(merge({"until": {"type": "string"}, "kills": {"type": "number", "description": "shortcut for until=kills:N"},
                 "radius": {"type": "number", "description": "engage radius, default 10"},
                 "seek_radius": {"type": "number", "description": "look for targets this far, default 35"},
@@ -202,6 +202,7 @@ GAME_TOOLS = [
     ("sleep", "action", "Go to sleep on the nearest bed (or bed at x,y,z, or floor=true). Fails if zombies are near, pain or panic.", obj(merge(XYZ, {"floor": {"type": "boolean"}, "radius": {"type": "number"}}, WAIT))),
     ("rest", "action", "Sit and rest on furniture nearby or on the ground.", obj(merge(XYZ, WAIT))),
     ("say", "action", "Character says a line above the head (does not go to the chat window).", obj({"text": {"type": "string"}}, ["text"])),
+    ("shout", "action", "Shout like the game's shout key: standing - loud, zombies around hear it and come (use to lure zombies to a good spot); sneaking - whisper, almost silent. whisper=true forces a whisper, whisper=false a loud shout.", obj({"whisper": {"type": "boolean"}})),
     # --- control
     ("pause", "control", "Pause the game.", obj()),
     ("unpause", "control", "Unpause the game and clear the alert.", obj()),

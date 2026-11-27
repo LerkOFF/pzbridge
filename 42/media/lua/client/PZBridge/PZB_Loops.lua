@@ -180,6 +180,32 @@ function Mover:applyMode(player, threat)
 end
 
 -- Закрытая дверь рядом (до 1.5 клетки), не запертая и не заколоченная.
+-- Ключ двери для памяти (клетка + сторона).
+function L.doorKey(o)
+    local sq = o:getSquare()
+    if not sq then return nil end
+    return sq:getX() .. "," .. sq:getY() .. "," .. sq:getZ() .. (U.try(o, "getNorth") and "N" or "W")
+end
+
+-- Дверь, которую уже пробовали открыть и она не открылась: считаем запертой.
+function L.isKnownLocked(o)
+    local k = L.doorKey(o)
+    local mem = PZBridge.mem()
+    return k ~= nil and mem.lockedDoors ~= nil and mem.lockedDoors[k] ~= nil
+end
+
+function L.markLocked(o)
+    local k = L.doorKey(o)
+    if not k then return end
+    local mem = PZBridge.mem()
+    mem.lockedDoors = mem.lockedDoors or {}
+    if not mem.lockedDoors[k] then
+        mem.lockedDoors[k] = PZBridge.gameTimeStr()
+        local sq = o:getSquare()
+        PZBridge.event("door_locked", { x = sq:getX(), y = sq:getY(), z = sq:getZ() }, "door did not open after one try: treated as locked")
+    end
+end
+
 function L.closedDoorNear(player, tx, ty)
     local best, bestD
     local px, py = player:getX(), player:getY()
@@ -188,7 +214,7 @@ function L.closedDoorNear(player, tx, ty)
         for i = 0, objs:size() - 1 do
             local o = objs:get(i)
             if P.isDoor(o) and not U.try(o, "IsOpen") and not U.try(o, "isBarricaded") then
-                local locked = U.try(o, "isLocked") or U.try(o, "isLockedByKey")
+                local locked = U.try(o, "isLocked") == true or U.try(o, "isLockedByKey") == true or L.isKnownLocked(o)
                 if not locked then
                     local d = U.dist(sq:getX() + 0.5, sq:getY() + 0.5, px, py)
                     -- дверь должна быть примерно в сторону цели
@@ -226,17 +252,27 @@ function Mover:update(player, now, threat)
     local stuck = (now - self.lastMoveMs) > 6000
     if (not busy) or stuck then
         if self.openDoors and self.doorsOpened < 6 then
+            -- прошлая попытка открыть дверь: если она так и не открылась, дверь заперта, больше не пробуем
+            if self.lastDoor and not busy then
+                if not U.try(self.lastDoor, "IsOpen") then L.markLocked(self.lastDoor) end
+                self.lastDoor = nil
+            end
             local door = L.closedDoorNear(player, self.tx, self.ty)
             if door then
                 ISTimedActionQueue.clear(player)
                 ISTimedActionQueue.add(ISOpenCloseDoor:new(player, door))
                 self.doorsOpened = self.doorsOpened + 1
                 self.state = "door"
+                self.lastDoor = door
                 self.lastMoveMs = now
                 return "moving", "opening door", T("UI_PZBridge_StepOpenDoor")
             end
         end
         if self.state == "door" and busy then return "moving" end
+        if self.lastDoor and not busy then
+            if not U.try(self.lastDoor, "IsOpen") then L.markLocked(self.lastDoor) end
+            self.lastDoor = nil
+        end
         self.repaths = self.repaths + 1
         if self.repaths > self.maxRepaths then
             S.moveMode = nil
@@ -672,6 +708,37 @@ function L.attack(player, z)
     return ok
 end
 
+-- Точка у головы лежачего зомби: игра сама считает клетку головы по кости
+-- Bip01_Head (IsoZombie:getHeadSquare). Берём направление от центра тела к этой
+-- клетке и ставим точку на ~0.65 клетки от центра тела. Если клетка головы
+-- совпадает с клеткой тела или недоступна, остаётся центр тела.
+function L.headPoint(z, player)
+    local zx, zy, zz = z:getX(), z:getY(), z:getZ()
+    local hs = U.try(z, "getHeadSquare", player)
+    if hs then
+        local hx, hy = hs:getX() + 0.5, hs:getY() + 0.5
+        local dx, dy = hx - zx, hy - zy
+        local d = math.sqrt(dx * dx + dy * dy)
+        if d > 0.3 then
+            return zx + dx / d * 0.65, zy + dy / d * 0.65, zz, true
+        end
+    end
+    return zx, zy, zz, false
+end
+
+-- Удар по лежачему: развернуться к голове, затем удар ногой (shove) или оружием.
+function L.finishDowned(player, z, how)
+    local hx, hy = L.headPoint(z, player)
+    pcall(player.faceLocationF, player, hx, hy)
+    if U.try(player, "isAttackStarted") or U.try(player, "isPerformingAttackAnimation") then return false end
+    pcall(player.setIsAiming, player, true)
+    pcall(player.setAimAtFloor, player, true)
+    pcall(player.setDoShove, player, how ~= "weapon")
+    local ok = pcall(player.AttemptAttack, player, 0.0)
+    if not ok then ok = pcall(player.DoAttack, player, 0.0) end
+    return ok
+end
+
 -- Толчок (валит стоящего зомби) или, если зомби лежит, удар ногой (stomp):
 -- тот же ванильный путь атаки, но с флагом shove.
 function L.shove(player, z)
@@ -873,9 +940,10 @@ function L.startFight(ctx, p, args)
             -- встать точно на тело: путь по точным координатам (не по центру клетки),
             -- цель пересчитывается, если тело при падении сместилось
             local zo = downedNear.obj
-            local zx, zy, zzz = zo:getX(), zo:getY(), zo:getZ()
+            local zx, zy, zzz = L.headPoint(zo, player)
+            local hd = U.dist(player:getX(), player:getY(), zx, zy)
             local onTopDist = args.on_top_dist or 0.45
-            if downedNear.dist > onTopDist and tries < 4 then
+            if hd > onTopDist and tries < 4 then
                 if job.mover then job.mover:cancel(player); job.mover = nil end
                 local moved = job.stepTo ~= nil and U.dist(job.stepTo[1], job.stepTo[2], zx, zy) > 0.35
                 local fresh = job.stepTo == nil or job.stepToId ~= downedNear.id
@@ -895,7 +963,7 @@ function L.startFight(ctx, p, args)
             if downedNear.dist <= range + 0.3 and now - job.lastAttackMs > interval then
                 local finish = args.finish or "stomp"
                 local ok
-                if finish == "weapon" then ok = L.attack(player, downedNear.obj) else ok = L.shove(player, downedNear.obj) end
+                ok = L.finishDowned(player, downedNear.obj, finish)
                 if ok then job.lastAttackMs = now end
             end
             return nil
