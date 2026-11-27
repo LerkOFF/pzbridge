@@ -1,0 +1,291 @@
+# PZBridge
+
+Мод для Project Zomboid build 42 (проверялся по ванильному Lua 42.22.2), через который внешняя
+программа, например ИИ-агент, управляет персонажем в одиночной игре. Связь идёт через файлы в
+`~/Zomboid/Lua/`, сверху есть CLI `tools/pzb.py` и MCP-сервер `tools/pzbridge_mcp.py`.
+
+Идея: мод даёт универсальные инструменты (восприятие, движение, поиск, взаимодействие, бой),
+а агент сам собирает из них любую просьбу игрока: «найди еды», «хочу пить», «убей 10 зомби»,
+«забаррикадируй дом». Внутри мода живут только циклы, которым нужна реакция быстрее, чем думает
+агент: `move_to`, `search`, `fight`, `flee`, `wait` и глобальный guard (автопауза).
+
+Все действия выполняются ванильными timed actions и помощниками контекстного меню, поэтому игра
+сама учитывает время, анимации, вес, шум и условия.
+
+## Установка и включение
+
+1. Папка мода: `~/Zomboid/mods/PZBridge/` со структурой B42:
+   ```
+   PZBridge/
+     common/                  (пустая, нужна игре)
+     42/mod.info
+     42/media/lua/client/PZBridge/*.lua
+     tools/pzb.py
+     tools/pzbridge_mcp.py
+   ```
+2. В главном меню игры: «Моды», включить PZBridge. Для уже созданного сохранения: при загрузке
+   «Дополнительно» / «Моды сохранения», включить PZBridge.
+3. Мод работает только в одиночной игре (проверяется `isClient()` / `isServer()`).
+4. В игре нажать **F9** (клавишу можно переназначить в настройках модов): откроется окно
+   «Доступ агента». Поставить галку «Разрешить управление». После каждой загрузки доступ
+   выключен, включает только игрок.
+
+## Окно «Доступ агента» (F9)
+
+* «Разрешить управление»: пока выключено, мод не выполняет команды (результат `denied`), только
+  `reply` и `get_access`. При выключении сразу останавливаются текущая задача и очередь действий.
+  Глобальный guard (автопауза) тоже работает только при включённом доступе, чтобы не мешать
+  человеку играть.
+* Поле «Сказать агенту» и кнопка «Отправить»: строка пишется в `pzbridge_inbox.txt` с id и
+  временем. Это чат игрока с агентом (в одиночной игре чата нет).
+* Лог переписки: сообщения игрока, ответы агента (команда `reply`, персонаж произносит их вслух)
+  и заметки мода («убил 3/10», «Отступаю: ...»).
+* Статус: текущая задача, её шаг, угроза (сколько зомби рядом, ближайший, видят ли), кнопка «Стоп».
+* Позиция окна не сохраняется.
+
+## Файлы моста (`~/Zomboid/Lua/`)
+
+| Файл | Кто пишет | Что внутри |
+| --- | --- | --- |
+| `pzbridge_cmd.txt` | агент | команды, по одной на строку |
+| `pzbridge_state.json` | мод, раз в секунду и после изменений | состояние персонажа и мира |
+| `pzbridge_results.json` | мод | результаты последних 60 команд |
+| `pzbridge_events.json` | мод | журнал событий (последние 300) |
+| `pzbridge_inbox.txt` | мод (окно F9) | сообщения игрока, JSON на строку |
+| `pzbridge_inbox_read.json` | pzb.py / MCP | id последнего прочитанного сообщения |
+
+Lua в игре может писать только файлы `.txt`, `.json`, `.log`, `.ini`, `.cfg` в `~/Zomboid/Lua/`.
+Мод перезаписывает JSON-файлы целиком; читатель должен повторить чтение, если JSON оборван
+(`pzb.py` так и делает).
+
+### Формат команды
+
+```
+<id> <tool> {json-аргументы}
+<id> <tool> позиционные аргументы key=value
+```
+
+Примеры:
+
+```
+1 move_to {"x":10512,"y":9640,"z":0,"mode":"auto"}
+2 walk 10512 9640 0
+3 search {"scope":"building","filter":{"category":"food"},"stop_on_first":true}
+4 say Привет
+```
+
+* `id` - целое, каждая новая команда больше предыдущей. Мод выполняет строки с id больше
+  последнего выполненного и не повторяет старые. При загрузке игры все строки, которые уже лежат
+  в файле, пропускаются.
+* `pzb.py` сам выдаёт id (максимум из файла и из state плюс один) и обрезает файл, когда он
+  длинный и уже прочитан.
+* Новая команда-действие заменяет текущую задачу и очищает очередь действий. Запросы восприятия
+  и команды управления текущую задачу не трогают.
+
+### Результат команды
+
+`pzbridge_results.json`: `{"session":..., "last_cmd_id":N, "results":[{"id", "tool", "status",
+"message", "data", "final"}]}`.
+
+Статусы: `running` (идёт), `ok` / `done` (успех), `failed`, `error`, `interrupted` (прервано
+угрозой, стопом или новой командой), `paused` (guard отступил, можно `resume`), `denied`
+(доступ выключен).
+
+### State
+
+Главное: `access`, `paused`, `time`, `player` (x, y, z, здание, комната, крадётся, спит, убийства),
+`body` (здоровье, кровотечения, укусы, раны по частям тела), `stats` (голод, жажда, усталость,
+выносливость, паника, стресс, боль, болезнь...), `moodles`, `hands`, `weight`, `inventory`
+(id, fullType, имя, категория, вес, у еды свежесть, калории, у жидкостей тип и чистота),
+`zombies` (в радиусе 20: позиция, расстояние, идёт ли к игроку, видит ли), `threat`,
+`nearby` (двери, окна, контейнеры с предметами, вода, предметы на полу в радиусе 8),
+`busy` и `queue`, `job`, `paused_job`, `last_cmd`, `last_error`, `alert`, `guard`,
+`events_seq`, `inbox_last_id`.
+
+### События
+
+`session_start`, `access`, `player_message`, `reply`, `kill`, `fight_progress`, `found`,
+`container_searched`, `damage`, `bitten`, `alert`, `guard`, `job_done`, `job_failed`,
+`job_paused`, `job_interrupted`, `stop`, `error`. У каждого `seq`, игровое время `gt`,
+`msg` и `data`.
+
+## Инструменты
+
+Все инструменты доступны через файл команд (JSON-аргументы) и один к одному через MCP.
+
+### Восприятие (не прерывают задачу)
+
+| Инструмент | Параметры | Что делает |
+| --- | --- | --- |
+| `get_state` | - | полный снимок (в MCP короткая выжимка из файла, `full=true` весь файл) |
+| `scan_zombies` | `radius` | живые зомби и недавно виденные |
+| `scan_area` | `radius`, `only[]`, `with_items` | здания (id, visited), комнаты, двери, окна, контейнеры, вода (clean/tainted), предметы на полу, кровати, транспорт |
+| `find_items` | `filter`, `where` (inventory, nearby, known, all), `radius`, `limit` | поиск предметов; плюс список неосмотренных контейнеров |
+| `get_item` | `id` | подробности предмета |
+| `get_building` | `id` | текущее здание или по id: комнаты, контейнеры |
+| `get_places` | - | отмеченные места |
+| `get_guard`, `get_access` | - | настройки guard, доступ |
+
+### Циклы внутри мода
+
+| Инструмент | Параметры | Что делает |
+| --- | --- | --- |
+| `move_to` | `x`, `y`, `z` или `place`, `mode` (auto, walk, sneak, run, sprint), `adjacent`, `open_doors`, `flee_on_threat`, `timeout`, пороги guard, `guard` | идёт к клетке, открывает двери по пути; в auto шаг без угрозы, крадётся, если зомби рядом и не замечают, бежит, если видят; при опасности прерывается событием `guard` |
+| `move_rel` | `dx`, `dy`, `mode` | то же, смещение от текущей позиции |
+| `flee` | `distance`, `mode`, `x`, `y` | отбежать от ближайших зомби или от точки |
+| `search` | `scope` (container, room, building, radius), `target`, `filter`, `stop_on_first`, `radius`, `take`, `max_containers`, `include_visited`, `include_corpses`, `mode` | обходит контейнеры по ближайшему, подходит, открывает (лут генерируется как в окне лута), запоминает содержимое и посещённое, находки в событиях `found` |
+| `fight` | `until` (clear, kills:N, target:ID), `kills`, `radius`, `seek_radius`, `weapon` (best, current, none, id), `firearms`, пороги guard, `guard` | бой: лучшее оружие ближнего боя, подход, поворот, удар, добивание лежачих; `kills:N` значит «не меньше N и пока никто не преследует»; guard отступает бегом и ставит задачу на паузу |
+| `wait` | `seconds` или `game_minutes`, `interrupt_on_threat` | подождать |
+
+### Взаимодействие
+
+`take` (`item_id` или `filter`, `from` = id контейнера, `floor` или `nearby`, `count`),
+`drop`, `transfer` (`to` = id контейнера), `equip` (`slot` primary, secondary, both), `unequip`,
+`wear`, `use` (`how` = eat, drink, read, pill, apply_bandage; `part`, `percent`),
+`drink_from` (источник по координатам или ближайший чистый, грязную воду только с
+`allow_dirty=true`), `fill`, `open`, `close`, `lock`, `unlock`, `climb_window`, `smash_window`,
+`barricade` (одна доска за вызов: молоток, доска, 2 гвоздя), `unbarricade`, `sleep`, `rest`,
+`face`, `attack` (один удар), `say`.
+
+### Управление и память
+
+`stop`, `pause`, `unpause`, `resume`, `set_guard` (autopause, pause_distance, autoflee,
+flee_distance, hp_min, bleeding_max, endurance_min, crowd_max, crowd_radius, threat_radius,
+danger_radius), `reply` (ответ игроку), `mark_place` (`name`, координаты, по умолчанию текущие),
+`forget_place`, `forget_visited`.
+
+Короткие позиционные имена для ручной работы: `walk x y z [mode]`, `walk_rel dx dy`,
+`loot x y z [fullType|id|all]`, `eat [что]`, `drink [что]`, `autopause on|off [дистанция]`,
+`autoflee on|off`.
+
+### Фильтр предметов
+
+```json
+{"category": "food", "name": "банка", "fullType": "Base.CannedBeans", "tag": "HAMMER",
+ "not_spoiled": true, "no_cooking": false, "safe": true, "min_condition": 3, "firearms": false}
+```
+
+Категории: `food`, `drink`, `water_clean`, `water_dirty`, `weapon`, `firearm`, `medical`, `tool`,
+`clothing`, `ammo`, `container`, `literature`, `water_container`, `any`. Можно передать строку
+категории вместо объекта.
+
+Id контейнера: `"x,y,z,индекс_объекта,индекс_контейнера"`.
+
+### Guard
+
+По умолчанию: `autopause=true`, `pause_distance=6`, `autoflee=false`, `flee_distance=15`,
+`hp_min=45`, `bleeding_max=1`, `endurance_min=0.25`, `crowd_max=4`, `crowd_radius=6`,
+`threat_radius=15`, `danger_radius=5`.
+
+* Глобальный: если зомби ближе `pause_distance`, игра ставится на паузу, в state появляется
+  `alert`, в событиях `alert`. Повторно пауза срабатывает, когда зона очистилась, или если зомби
+  вплотную и прошло 8 секунд. С `autoflee=true` вместо паузы персонаж отбегает.
+* В `move_to` и `search`: прерывание, если зомби видит игрока или ближе `danger_radius`.
+* В `fight`: отступление при низком здоровье, сильном кровотечении, одышке, толпе больше
+  `crowd_max` или без целого оружия.
+* Пороги можно передать в каждом вызове, `guard=false` выключает предохранитель для вызова.
+
+## CLI `tools/pzb.py`
+
+Только стандартная библиотека Python 3.8+. Каталог файлов можно сменить переменной `PZBRIDGE_DIR`.
+
+```
+python3 tools/pzb.py state              # выжимка состояния
+python3 tools/pzb.py state --json       # весь state
+python3 tools/pzb.py cmd "walk 10 20 0" # дописать команду, печатает id
+python3 tools/pzb.py call search '{"scope":"building","filter":"food"}'
+python3 tools/pzb.py wait               # ждать результат последней команды
+python3 tools/pzb.py events --since 10
+python3 tools/pzb.py messages           # новые сообщения игрока
+python3 tools/pzb.py reply "Иду за едой"
+python3 tools/pzb.py waitfor "action_done|event:alert" --timeout 60
+python3 tools/pzb.py stop
+```
+
+## MCP-сервер `tools/pzbridge_mcp.py`
+
+stdio, JSON-RPC 2.0, методы `initialize` (с полем `instructions`: как играть и рецепты),
+`tools/list`, `tools/call`, `prompts/list`, `prompts/get` (prompt `play`), `resources/list`,
+`resources/read` (`pzbridge://playbook`, `pzbridge://state`), `ping`. Только стандартная
+библиотека Python.
+
+Инструменты только MCP: `get_player_messages`, `reply_to_player`, `get_state`, `get_events`,
+`wait_for`, `wait_for_result`, `send_command`, `stop`, `get_access`. Остальные отправляют
+команду моду. Действия возвращают `cmd_id` и статус `running` сразу (или ждут `wait` секунд),
+запросы ждут финальный результат.
+
+### Подключение
+
+Claude Code:
+
+```
+claude mcp add pzbridge -- python3 ~/Zomboid/mods/PZBridge/tools/pzbridge_mcp.py
+```
+
+Cursor (`~/.cursor/mcp.json`) и другие клиенты с JSON-конфигом. Путь лучше указать полностью,
+многие клиенты не раскрывают `~`:
+
+```json
+{
+  "mcpServers": {
+    "pzbridge": {
+      "command": "python3",
+      "args": ["/полный/путь/к/Zomboid/mods/PZBridge/tools/pzbridge_mcp.py"],
+      "env": { "PZBRIDGE_DIR": "/полный/путь/к/Zomboid/Lua" }
+    }
+  }
+}
+```
+
+`PZBRIDGE_DIR` нужен, только если папка Zomboid не в домашнем каталоге.
+
+### Как агенту играть
+
+1. `get_player_messages`: что просит игрок. Если `access=false`, попросить через
+   `reply_to_player` нажать F9 и разрешить управление.
+2. Восприятие: `get_state`, `scan_zombies`, `scan_area`, `find_items`.
+3. Примитивы: `move_to`, `search`, `take`, `use`, `fight` и т.д.
+4. `wait_for_result(cmd_id)` или `wait_for("action_done|event:alert")`, `get_events(since)`.
+5. `reply_to_player` с итогом.
+
+Рецепты (это документация, а не код под задачу):
+
+* «Найди еды»: `find_items(filter=food, where=all)`; если пусто, `search(scope=building,
+  filter=food, stop_on_first=true)`; затем `take(item_id, from)`; ответ «Нашёл еду: X».
+* «Хочу пить»: `find_items(filter=water_clean)` и `drink`; в инвентаре `use(how=drink)`, в
+  контейнере `take`, затем `use`; иначе `scan_area(only=[water])` и `drink_from` чистого
+  источника. Грязные источники упомянуть как запасной вариант (нужно кипятить).
+* «Убей 10 зомби»: `fight(until="kills:10")`, прогресс по событиям `fight_progress`, при
+  `paused` сообщить причину и спросить, продолжать ли (`resume`).
+
+## Ограничения
+
+* Только одиночная игра, один персонаж (игрок 0).
+* Команды читаются раз в 250 мс, state пишется раз в секунду. Агент не управляет кадрами, только
+  задачами.
+* На паузе timed actions стоят; команды читаются и запросы отвечают и на паузе.
+* Клетки дальше примерно 50-60 тайлов от игрока не загружены: туда `move_to` не построит путь,
+  нужно идти частями.
+* Контейнер открывается так же, как при первом взгляде в окно лута: тогда же генерируется лут.
+* `take` берёт предметы только из одного источника за вызов (ванильная ходьба к контейнеру
+  сбрасывает очередь).
+* Огнестрел в `fight` только с `firearms=true` (шумно).
+* Память (места, посещённые здания и контейнеры, их содержимое) хранится в modData персонажа и
+  живёт в сохранении; известные зомби только в текущей сессии.
+
+## Что проверить в живой игре
+
+* Бег и спринт в `move_to`/`flee`: персонаж каждый кадр берёт бег из ввода, мод повторяет
+  `setRunning(true)` в `update()` своего действия ходьбы. Если не бежит, нужен другой способ.
+* Атака: `AttemptAttack(0)` (через ванильный хук `Attack` и `DoAttack`), `setIsAiming(true)` и
+  `setAimAtFloor` для лежачих. Возможно, без зажатого прицела удар не начнётся.
+* `OnTickEvenPaused`: команды на паузе.
+* Автопауза через `UIManager.getSpeedControls():SetCurrentGameSpeed(0)`.
+* Сон через `ISWorldObjectContextMenu.onConfirmSleep` без диалога.
+* Баррикада через наследника `ISBarricadeAction` (ванильная проверка молотка в 42.22 сломана).
+* Генерация лута при `search` (`ItemPicker.fillContainer`).
+* Открытие дверей по пути: мод открывает закрытую дверь рядом, если путь встал.
+
+## Лицензия
+
+MIT, см. `LICENSE`.
