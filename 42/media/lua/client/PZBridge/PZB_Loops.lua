@@ -782,6 +782,19 @@ function L.collectContainers(player, scope, target, radius, includeCorpses)
                 if c then add({ c = c, o = o, sq = sq, cid = P.containerId(sq, i, ci) }) end
             end
         end
+        -- трупы лежат не среди объектов клетки, а в списке «статичных движущихся»
+        if includeCorpses then
+            local sm = U.try(sq, "getStaticMovingObjects")
+            if sm then
+                for k = 0, sm:size() - 1 do
+                    local body = sm:get(k)
+                    if instanceof(body, "IsoDeadBody") then
+                        local c = U.try(body, "getContainer")
+                        if c then add({ c = c, o = body, sq = sq, cid = P.corpseId(sq, k) }) end
+                    end
+                end
+            end
+        end
     end
     local function addRoom(room)
         local cl = U.try(room, "getContainer")

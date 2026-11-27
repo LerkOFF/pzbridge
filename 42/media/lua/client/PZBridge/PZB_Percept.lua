@@ -363,7 +363,27 @@ function P.parseCid(cid)
 end
 
 -- Найти контейнер по id "x,y,z,objIndex,containerIndex".
+-- Id контейнера трупа: x,y,z,corpse,k (k - индекс в getStaticMovingObjects клетки).
+function P.corpseId(sq, k)
+    return sq:getX() .. "," .. sq:getY() .. "," .. sq:getZ() .. ",corpse," .. k
+end
+
 function P.resolveContainer(cid)
+    local cx, cy, cz, ck = string.match(tostring(cid), "^(-?%d+),(-?%d+),(-?%d+),corpse,(%d+)$")
+    if cx then
+        local sq = P.square(tonumber(cx), tonumber(cy), tonumber(cz))
+        local sm = sq and U.try(sq, "getStaticMovingObjects")
+        if not sm then return nil end
+        local k = tonumber(ck)
+        local body = (k < sm:size()) and sm:get(k) or nil
+        if not (body and instanceof(body, "IsoDeadBody")) then
+            -- индекс мог сдвинуться: любой труп на клетке
+            body = nil
+            for i = 0, sm:size() - 1 do if instanceof(sm:get(i), "IsoDeadBody") then body = sm:get(i); break end end
+        end
+        if body then return U.try(body, "getContainer"), body, sq end
+        return nil
+    end
     local x, y, z, oi, ci = P.parseCid(cid)
     if not x then return nil end
     local sq = P.square(x, y, z)
