@@ -178,10 +178,24 @@ Tool("start_engine", { params = {}, fn = function(a, ctx, p)
     local v = p:getVehicle()
     if not v or not v:isDriver(p) then return "error", "not in the driver seat (enter_vehicle first)" end
     if v:isEngineRunning() then return "ok", "engine already running" end
+    -- двигатель заводится не всегда с первого раза (зависит от состояния): ждём, пока стартер
+    -- докрутит, и пробуем снова до tries раз
+    local maxTries = num(a.tries) or 5
     ISVehicleMenu.onStartEngine(p)
     return L.actionJob(ctx, "start_engine", function(job, pl)
-        if v:isEngineRunning() then return "done", "engine running", V.info(v, pl) end
-        return "failed", "engine did not start (no key, dead battery, no fuel, broken engine)", V.info(v, pl)
+        if v:isEngineRunning() then return "done", "engine running after " .. (job.tries or 1) .. " tries", V.info(v, pl) end
+        local now = U.nowMs()
+        job.t0 = job.t0 or now
+        local st = tostring(U.try(v, "getEngineState") or "")
+        local cranking = string.find(st, "Start", 1, true) ~= nil
+        if (cranking and now - job.t0 < 6000) or now - job.t0 < 2500 then return "continue" end
+        job.tries = (job.tries or 1) + 1
+        if job.tries <= maxTries and pl:getVehicle() == v then
+            job.t0 = nil
+            ISVehicleMenu.onStartEngine(pl)
+            return "continue"
+        end
+        return "failed", "engine did not start after " .. maxTries .. " tries (no key, dead battery, no fuel or a bad engine)", V.info(v, pl)
     end, "starting the engine", T("UI_PZBridge_StepVehicle"))
 end })
 
