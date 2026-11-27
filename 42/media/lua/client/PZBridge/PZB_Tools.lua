@@ -263,6 +263,18 @@ local function disarmAutopause()
     S.lastAutoPauseMs = U.nowMs()
 end
 
+-- Скорость игры: 1 обычная, 2-4 ускорение (как кнопки в правом верхнем углу).
+-- Для долгих безопасных дел: чтение, сон, ожидание. Автопауза при зомби рядом останавливает время.
+Tool("set_speed", { kind = "control", params = { "speed" }, fn = function(a, ctx, p)
+    local sp = math.floor(num(a.speed) or 1)
+    if sp < 1 or sp > 4 then return "error", "speed must be 1..4 (use pause for 0)" end
+    local sc = UIManager and UIManager.getSpeedControls and UIManager.getSpeedControls()
+    if not sc then return "error", "speed controls not available" end
+    pcall(sc.SetCurrentGameSpeed, sc, sp)
+    S.alert = nil
+    return "ok", "game speed " .. sp
+end })
+
 Tool("unpause", { kind = "control", fn = function(a, ctx, p)
     disarmAutopause()
     setPause(false)
