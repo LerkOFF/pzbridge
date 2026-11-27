@@ -1214,7 +1214,8 @@ function L.startFight(ctx, p, args)
                 job.mover = nil
                 job.unreachable = job.unreachable or {}
                 job.unreachable[target.id] = now
-                if string.find(tostring(why), "locked door", 1, true) and z then
+                -- зомби в здании, а персонаж снаружи и пути нет: здание недоступно (заперто)
+                if z then
                     local tb = L.buildingOfSquare(z:getCurrentSquare())
                     if tb and tb ~= L.buildingOfSquare(player:getCurrentSquare()) then L.markBlockedBuilding(tb, why) end
                 end
