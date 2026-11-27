@@ -671,6 +671,8 @@ Tool("map", { kind = "control", params = { "radius", "type", "limit" }, fn = fun
             if rooms then
                 for r = 0, rooms:size() - 1 do
                     local n = tostring(U.try(rooms:get(r), "getName") or "")
+                    local rz = U.try(rooms:get(r), "getZ")
+                    if rz then kinds.levels = kinds.levels or {}; kinds.levels[rz] = true end
                     names[n] = (names[n] or 0) + 1
                     if n == "bedroom" or n == "kitchen" or n == "livingroom" then kinds.residential = true end
                     if SHOP_ROOMS[n] then kinds.shop = true end
@@ -689,6 +691,13 @@ Tool("map", { kind = "control", params = { "radius", "type", "limit" }, fn = fun
                     blocked = mem.blockedBuildings and mem.blockedBuildings[key] ~= nil or false,
                     explored = U.try(def, "isAllExplored") == true,
                 }
+                if kinds.levels then
+                    local lv = {}
+                    for z in pairs(kinds.levels) do lv[#lv + 1] = z end
+                    table.sort(lv)
+                    out[#out].levels = table.concat(lv, ",")
+                    out[#out].underground = lv[1] < 0
+                end
             end
         end
     end

@@ -117,7 +117,24 @@ end
 
 function Mover:dest(player)
     local sq = P.square(self.tx, self.ty, self.tz)
-    if not sq then return nil, "square not loaded (too far)" end
+    if not sq then
+        -- цель ещё не подгружена: идти к промежуточной точке по прямой (до 35 клеток)
+        local px, py = player:getX(), player:getY()
+        local dx, dy = self.tx - px, self.ty - py
+        local d = math.sqrt(dx * dx + dy * dy)
+        for step = 35, 10, -5 do
+            if step < d then
+                local wsq = P.square(math.floor(px + dx / d * step), math.floor(py + dy / d * step), math.floor(player:getZ()))
+                if wsq then
+                    if U.try(wsq, "isFree", false) then self.waypoint = true; return wsq end
+                    local adj = AdjacentFreeTileFinder.Find(wsq, player)
+                    if adj then self.waypoint = true; return adj end
+                end
+            end
+        end
+        return nil, "square not loaded (too far)"
+    end
+    self.waypoint = false
     if self.adjacent or not U.try(sq, "isFree", false) then
         local adj = AdjacentFreeTileFinder.Find(sq, player)
         if adj then return adj end
@@ -134,6 +151,7 @@ function Mover:distLeft(player)
 end
 
 function Mover:arrived(player)
+    if self.waypoint then return false end
     if math.abs(player:getZ() - self.tz) >= 1 and not self.adjacent then return false end
     if self.destSq then
         local d = self:distLeft(player)
@@ -504,6 +522,12 @@ function Mover:update(player, now, threat)
         S.moveMode = nil
         return "failed", "broken glass ahead and no shoes: put shoes on or clear the glass (pickup_glass)"
     end
+    -- дошли до промежуточной точки: следующий отрезок
+    if self.waypoint and self.destSq and self:distLeft(player) <= 1.5 then
+        local ok, err = self:begin(player)
+        if not ok then return "failed", err end
+        return "moving", "next leg", nil
+    end
     -- лезем через окно: ждём конца действий, потом продолжаем путь
     if self.state == "window" then
         if P.isBusy(player) then return "moving", "entering through a window", T("UI_PZBridge_StepClimb") end
@@ -822,10 +846,15 @@ function L.collectContainers(player, scope, target, radius, includeCorpses)
         return list, nil
     elseif scope == "building" then
         if target then
-            P.eachSquare(player:getX(), player:getY(), player:getZ(), 30, function(sq)
-                local b = sq:getBuilding()
-                if b and P.buildingKey(b) == tostring(target) then building = b; return "break" end
-            end)
+            -- здание может быть на другом уровне (подвал, бункер, второй этаж)
+            local pz = math.floor(player:getZ())
+            for _, z in ipairs({ pz, pz - 1, pz + 1, pz - 2 }) do
+                P.eachSquare(player:getX(), player:getY(), z, 30, function(sq)
+                    local b = sq:getBuilding()
+                    if b and P.buildingKey(b) == tostring(target) then building = b; return "break" end
+                end)
+                if building then break end
+            end
             if not building then return list, "building " .. tostring(target) .. " not found nearby" end
         else
             building = player:getCurrentBuilding()
