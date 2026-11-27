@@ -165,6 +165,7 @@ function Mover:tryWindow(player)
         if L.queueWindowEntry(player, e.o) then
             self.window = e.o
             self.windowTries = 0
+            self.climbTries = 0
             self.state = "window"
             self.lastMoveMs = U.nowMs()
             return true
@@ -338,7 +339,9 @@ function L.queueWindowEntry(player, w)
     if U.try(w, "isSmashed") then
         if not U.try(w, "isGlassRemoved") then ISTimedActionQueue.add(ISRemoveBrokenGlass:new(player, w)) end
     elseif not U.try(w, "IsOpen") then
+        -- сначала только открыть: «пролезть» игра проверяет сразу и выкинет, пока окно закрыто
         ISTimedActionQueue.add(ISOpenCloseWindow:new(player, w))
+        return true
     end
     ISTimedActionQueue.add(ISClimbThroughWindow:new(player, w, 0))
     return true
@@ -512,6 +515,15 @@ function Mover:update(player, now, threat)
             local ok, err = self:begin(player)
             if not ok then return "failed", err end
             return "moving"
+        end
+        -- окно открыто (или разбито и без стекла), а мы снаружи: лезть именно в него
+        local passable = w and (U.try(w, "IsOpen") or (U.try(w, "isSmashed") and U.try(w, "isGlassRemoved")))
+        if passable and (self.climbTries or 0) < 3 then
+            self.climbTries = (self.climbTries or 0) + 1
+            if luautils.walkAdjWindowOrDoor(player, w:getSquare(), w) then
+                ISTimedActionQueue.add(ISClimbThroughWindow:new(player, w, 0))
+                return "moving", "climbing through the window", T("UI_PZBridge_StepClimb")
+            end
         end
         -- не открылось: пробуем ещё (окна заедают), пока не заклинит насовсем
         if w and not U.try(w, "IsOpen") and not U.try(w, "isSmashed") and U.try(w, "isPermaLocked") ~= true
