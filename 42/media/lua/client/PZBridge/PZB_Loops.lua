@@ -654,6 +654,7 @@ end
 function L.attack(player, z)
     pcall(player.faceThisObject, player, z)
     if U.try(player, "isAttackStarted") or U.try(player, "isPerformingAttackAnimation") then return false end
+    pcall(player.setDoShove, player, false)
     pcall(player.setIsAiming, player, true)
     -- по лежачему зомби бить в пол (добивание)
     local onFloor = U.try(z, "isOnFloor") == true
@@ -667,6 +668,19 @@ function L.attack(player, z)
     if not ok then
         ok = pcall(player.DoAttack, player, 0.0)
     end
+    return ok
+end
+
+-- Толчок (валит стоящего зомби) или, если зомби лежит, удар ногой (stomp):
+-- тот же ванильный путь атаки, но с флагом shove.
+function L.shove(player, z)
+    pcall(player.faceThisObject, player, z)
+    if U.try(player, "isAttackStarted") or U.try(player, "isPerformingAttackAnimation") then return false end
+    pcall(player.setIsAiming, player, true)
+    pcall(player.setAimAtFloor, player, U.try(z, "isOnFloor") == true)
+    pcall(player.setDoShove, player, true)
+    local ok = pcall(player.AttemptAttack, player, 0.0)
+    if not ok then ok = pcall(player.DoAttack, player, 0.0) end
     return ok
 end
 
@@ -820,6 +834,64 @@ function L.startFight(ctx, p, args)
         end
         job.noTargetSince = nil
         local range = L.weaponRange(player)
+        local interval = args.attack_interval_ms or 650
+        -- Тактика ближнего боя:
+        -- 1) стоящий зомби в зоне удара: бить; если рядом стоят двое и больше - валить толчком;
+        -- 2) поваленный зомби рядом: встать на него (так он не поднимется) и добивать ногой или оружием,
+        --    пока рядом нет стоящих.
+        local standingIn, downedNear, crowd = nil, nil, 0
+        for _, zi in ipairs(zs) do
+            if math.abs(zi.z - player:getZ()) < 1 and zi.obj then
+                local dz = zi.on_floor or zi.crawling
+                if not dz then
+                    if zi.dist <= 3 then crowd = crowd + 1 end
+                    if zi.dist <= range and (not standingIn or zi.dist < standingIn.dist) then standingIn = zi end
+                elseif zi.dist <= 2.5 and (not downedNear or zi.dist < downedNear.dist) then
+                    downedNear = zi
+                end
+            end
+        end
+        if standingIn then
+            if job.mover then job.mover:cancel(player); job.mover = nil end
+            local doShove = crowd >= 2 and args.shove ~= false
+            job.step = (doShove and "shoving " or "hitting ") .. tostring(standingIn.id) .. ", standing nearby " .. crowd .. ", killed " .. k
+            job.stepUI = T("UI_PZBridge_StepTarget", tostring(standingIn.id), standingIn.dist, k)
+            if now - job.lastAttackMs > interval then
+                local ok
+                if doShove then ok = L.shove(player, standingIn.obj) else ok = L.attack(player, standingIn.obj) end
+                if ok then job.lastAttackMs = now end
+            end
+            return nil
+        end
+        if downedNear then
+            job.onTop = job.onTop or {}
+            local tries = job.onTop[downedNear.id] or 0
+            job.step = "finishing downed " .. tostring(downedNear.id) .. " at " .. tostring(downedNear.dist) .. ", killed " .. k
+            job.stepUI = T("UI_PZBridge_StepTarget", tostring(downedNear.id), downedNear.dist, k)
+            if downedNear.dist > 0.7 and tries < 3 then
+                -- встать на поваленного
+                if job.mover == nil or job.moverFor ~= downedNear.id or not job.moverDowned then
+                    if job.mover then job.mover:cancel(player) end
+                    job.mover = L.newMover(downedNear.x, downedNear.y, downedNear.z, { mode = "walk", adjacent = false, max_repaths = 1, open_doors = false })
+                    job.moverFor = downedNear.id
+                    job.moverDowned = true
+                end
+                local st = job.mover:update(player, now, nil)
+                if st == "failed" or st == "arrived" then
+                    job.mover = nil
+                    job.onTop[downedNear.id] = tries + 1
+                end
+                if downedNear.dist > range then return nil end
+            end
+            if job.mover and downedNear.dist <= 0.7 then job.mover:cancel(player); job.mover = nil end
+            if downedNear.dist <= range + 0.3 and now - job.lastAttackMs > interval then
+                local finish = args.finish or "stomp"
+                local ok
+                if finish == "weapon" then ok = L.attack(player, downedNear.obj) else ok = L.shove(player, downedNear.obj) end
+                if ok then job.lastAttackMs = now end
+            end
+            return nil
+        end
         local z = target.obj
         -- лежачий или ползущий зомби сам не подойдёт: идти к нему вплотную и добивать
         local downed = target.on_floor or target.crawling
@@ -849,7 +921,7 @@ function L.startFight(ctx, p, args)
         end
         -- в радиусе удара
         if job.mover then job.mover:cancel(player); job.mover = nil end
-        if now - job.lastAttackMs > (args.attack_interval_ms or 650) then
+        if now - job.lastAttackMs > interval then
             if L.attack(player, z) then job.lastAttackMs = now end
         end
         return nil

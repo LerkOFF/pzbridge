@@ -144,7 +144,7 @@ Lua в игре может писать только файлы `.txt`, `.json`,
 | `move_rel` | `dx`, `dy`, `mode` | то же, смещение от текущей позиции |
 | `flee` | `distance`, `mode`, `x`, `y` | отбежать от ближайших зомби или от точки |
 | `search` | `scope` (container, room, building, radius), `target`, `filter`, `stop_on_first`, `radius`, `take`, `max_containers`, `include_visited`, `include_corpses`, `mode` | обходит контейнеры по ближайшему, подходит, открывает (лут генерируется как в окне лута), запоминает содержимое и посещённое, находки в событиях `found` |
-| `fight` | `until` (clear, kills:N, target:ID), `kills`, `radius`, `seek_radius`, `weapon` (best, current, none, id), `firearms`, пороги guard, `guard` | бой: лучшее оружие ближнего боя, подход, поворот, удар, добивание лежачих; `kills:N` значит «не меньше N и пока никто не преследует»; guard отступает бегом и ставит задачу на паузу |
+| `fight` | `until` (clear, kills:N, target:ID), `kills`, `radius`, `seek_radius`, `weapon` (best, current, none, id), `firearms`, `finish` (stomp, weapon), `shove`, пороги guard, `guard` | бой: лучшее оружие ближнего боя, подход, поворот, удар; на поваленного зомби персонаж встаёт (так тот не поднимется) и добивает ногой или оружием; если вплотную стоят двое и больше, ближнего валит толчком и дерётся с остальными, стоя на нём; `kills:N` значит «не меньше N и пока никто не преследует»; guard отступает бегом и ставит задачу на паузу |
 | `wait` | `seconds` или `game_minutes`, `interrupt_on_threat` | подождать |
 
 ### Взаимодействие
