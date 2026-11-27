@@ -618,6 +618,7 @@ function L.startSearch(ctx, p, args)
     end
     job.stop = function(job, player)
         if job.mover then job.mover:cancel(player) end
+        if job.stepTo then ISTimedActionQueue.clear(player); job.stepTo = nil end
     end
     PZBridge.startJob(job, ctx)
     return "running", "searching " .. #todo .. " containers"
@@ -853,6 +854,7 @@ function L.startFight(ctx, p, args)
         end
         if standingIn then
             if job.mover then job.mover:cancel(player); job.mover = nil end
+            if job.stepTo then ISTimedActionQueue.clear(player); job.stepTo = nil end
             local doShove = crowd >= 2 and args.shove ~= false
             job.step = (doShove and "shoving " or "hitting ") .. tostring(standingIn.id) .. ", standing nearby " .. crowd .. ", killed " .. k
             job.stepUI = T("UI_PZBridge_StepTarget", tostring(standingIn.id), standingIn.dist, k)
@@ -868,22 +870,28 @@ function L.startFight(ctx, p, args)
             local tries = job.onTop[downedNear.id] or 0
             job.step = "finishing downed " .. tostring(downedNear.id) .. " at " .. tostring(downedNear.dist) .. ", killed " .. k
             job.stepUI = T("UI_PZBridge_StepTarget", tostring(downedNear.id), downedNear.dist, k)
-            if downedNear.dist > 0.7 and tries < 3 then
-                -- встать на поваленного
-                if job.mover == nil or job.moverFor ~= downedNear.id or not job.moverDowned then
-                    if job.mover then job.mover:cancel(player) end
-                    job.mover = L.newMover(downedNear.x, downedNear.y, downedNear.z, { mode = "walk", adjacent = false, max_repaths = 1, open_doors = false })
-                    job.moverFor = downedNear.id
-                    job.moverDowned = true
-                end
-                local st = job.mover:update(player, now, nil)
-                if st == "failed" or st == "arrived" then
-                    job.mover = nil
-                    job.onTop[downedNear.id] = tries + 1
+            -- встать точно на тело: путь по точным координатам (не по центру клетки),
+            -- цель пересчитывается, если тело при падении сместилось
+            local zo = downedNear.obj
+            local zx, zy, zzz = zo:getX(), zo:getY(), zo:getZ()
+            local onTopDist = args.on_top_dist or 0.45
+            if downedNear.dist > onTopDist and tries < 4 then
+                if job.mover then job.mover:cancel(player); job.mover = nil end
+                local moved = job.stepTo ~= nil and U.dist(job.stepTo[1], job.stepTo[2], zx, zy) > 0.35
+                local fresh = job.stepTo == nil or job.stepToId ~= downedNear.id
+                if fresh or moved or not P.isBusy(player) then
+                    if not fresh and not moved then job.onTop[downedNear.id] = tries + 1 end
+                    ISTimedActionQueue.clear(player)
+                    ISTimedActionQueue.add(ISPathFindAction:pathToLocationF(player, zx, zy, zzz))
+                    job.stepTo = { zx, zy }
+                    job.stepToId = downedNear.id
                 end
                 if downedNear.dist > range then return nil end
+            elseif job.stepTo and P.isBusy(player) then
+                -- уже на теле: остановиться
+                ISTimedActionQueue.clear(player)
+                job.stepTo = nil
             end
-            if job.mover and downedNear.dist <= 0.7 then job.mover:cancel(player); job.mover = nil end
             if downedNear.dist <= range + 0.3 and now - job.lastAttackMs > interval then
                 local finish = args.finish or "stomp"
                 local ok
